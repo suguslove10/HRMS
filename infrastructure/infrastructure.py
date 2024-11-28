@@ -16,7 +16,6 @@ class HRMSInfrastructure:
         self.region = region
         self.dynamodb = boto3.client('dynamodb', region_name=region)
         self.s3 = boto3.client('s3', region_name=region)
-        self.lambda_client = boto3.client('lambda', region_name=region)
         self.iam = boto3.client('iam', region_name=region)
 
     def generate_env_file(self, credentials):
@@ -74,7 +73,6 @@ FLASK_DEBUG=1"""
                     BillingMode='PAY_PER_REQUEST'
                 )
                 print(f"Created table {table_name}")
-                
                 waiter = self.dynamodb.get_waiter('table_exists')
                 waiter.wait(
                     TableName=table_name,
@@ -87,29 +85,31 @@ FLASK_DEBUG=1"""
                     raise e
 
     def create_s3_bucket(self, bucket_name):
+        bucket_policy = {
+            "Version": "2012-10-17",
+            "Statement": [{
+                "Sid": "FullAccess",
+                "Effect": "Allow",
+                "Principal": "*",
+                "Action": ["s3:*"],
+                "Resource": [
+                    f"arn:aws:s3:::{bucket_name}",
+                    f"arn:aws:s3:::{bucket_name}/*"
+                ]
+            }]
+        }
+
         try:
             if self.region == 'us-east-1':
                 self.s3.create_bucket(Bucket=bucket_name)
             else:
                 self.s3.create_bucket(
                     Bucket=bucket_name,
-                    CreateBucketConfiguration={
-                        'LocationConstraint': self.region
-                    }
+                    CreateBucketConfiguration={'LocationConstraint': self.region}
                 )
 
-            # Configure CORS
-            cors_configuration = {
-                'CORSRules': [{
-                    'AllowedHeaders': ['*'],
-                    'AllowedMethods': ['GET', 'PUT', 'POST', 'DELETE'],
-                    'AllowedOrigins': ['*'],
-                    'ExposeHeaders': []
-                }]
-            }
-            self.s3.put_bucket_cors(Bucket=bucket_name, CORSConfiguration=cors_configuration)
-
-            # Configure public access block
+            # Configure bucket permissions
+            self.s3.put_bucket_policy(Bucket=bucket_name, Policy=json.dumps(bucket_policy))
             self.s3.put_public_access_block(
                 Bucket=bucket_name,
                 PublicAccessBlockConfiguration={
@@ -120,26 +120,18 @@ FLASK_DEBUG=1"""
                 }
             )
 
-            # Add bucket policy
-            bucket_policy = {
-                "Version": "2012-10-17",
-                "Statement": [
-                    {
-                        "Sid": "AllowFullAccess",
-                        "Effect": "Allow",
-                        "Principal": "*",
-                        "Action": [
-                            "s3:GetObject",
-                            "s3:PutObject",
-                            "s3:DeleteObject"
-                        ],
-                        "Resource": f"arn:aws:s3:::{bucket_name}/*"
-                    }
-                ]
+            # Enable CORS
+            cors_config = {
+                'CORSRules': [{
+                    'AllowedHeaders': ['*'],
+                    'AllowedMethods': ['GET', 'PUT', 'POST', 'DELETE'],
+                    'AllowedOrigins': ['*'],
+                    'ExposeHeaders': []
+                }]
             }
-            self.s3.put_bucket_policy(Bucket=bucket_name, Policy=json.dumps(bucket_policy))
+            self.s3.put_bucket_cors(Bucket=bucket_name, CORSConfiguration=cors_config)
 
-            print(f"Created and configured S3 bucket {bucket_name}")
+            print(f"Created S3 bucket {bucket_name}")
         except ClientError as e:
             if e.response['Error']['Code'] in ['BucketAlreadyExists', 'BucketAlreadyOwnedByYou']:
                 print(f"Bucket {bucket_name} already exists")
