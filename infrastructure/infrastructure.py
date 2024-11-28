@@ -312,8 +312,8 @@ def main():
     try:
         # AWS credentials
         credentials = {
-            'access_key': 'AKIATCKAM3ED6I3FYSFF',
-            'secret_key': '5mni3YVNx8b1FcMyMHyNMdbyeLQ4sjwcoyyJ/bjM'
+            'access_key': 'your access key',
+            'secret_key': 'your secret key'
         }
 
         # Initialize infrastructure
