@@ -1,115 +1,126 @@
 {% extends "base.html" %}
 {% block title %}Employees{% endblock %}
 {% block content %}
-<div class="mb-6 flex justify-between items-center">
-    <h2 class="text-2xl font-bold">Employees</h2>
-    {% if is_admin %}
-    <button onclick="document.getElementById('createEmployeeModal').classList.remove('hidden')" 
-            class="bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded">
-        Add Employee
-    </button>
-    {% endif %}
-</div>
+<div class="container mx-auto px-4">
+    <div class="mb-6 flex justify-between items-center">
+        <h2 class="text-2xl font-bold">Employees</h2>
+        <button onclick="showAddEmployeeModal()" class="bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded">
+            Add Employee
+        </button>
+    </div>
 
-<div class="bg-white rounded-lg shadow-md overflow-hidden">
-    <table class="min-w-full">
-        <thead>
-            <tr class="bg-gray-100">
-                <th class="px-6 py-3 text-left text-gray-700">Name</th>
-                <th class="px-6 py-3 text-left text-gray-700">Email</th>
-                <th class="px-6 py-3 text-left text-gray-700">Department</th>
-                <th class="px-6 py-3 text-left text-gray-700">Position</th>
-                <th class="px-6 py-3 text-left text-gray-700">Admin</th>
-                {% if is_admin %}
-                <th class="px-6 py-3 text-left text-gray-700">Actions</th>
-                {% endif %}
-            </tr>
-        </thead>
-        <tbody>
-            {% for employee in employees %}
-            <tr class="border-t">
-                <td class="px-6 py-4">{{ employee.name }}</td>
-                <td class="px-6 py-4">{{ employee.email }}</td>
-                <td class="px-6 py-4">{{ employee.department }}</td>
-                <td class="px-6 py-4">{{ employee.position }}</td>
-                <td class="px-6 py-4">
-                    {% if employee.is_admin %}
-                    <span class="px-2 py-1 bg-green-100 text-green-800 rounded-full text-sm">Yes</span>
-                    {% else %}
-                    <span class="px-2 py-1 bg-gray-100 text-gray-800 rounded-full text-sm">No</span>
-                    {% endif %}
-                </td>
-                {% if is_admin %}
-                <td class="px-6 py-4">
-                    <button onclick="editEmployee('{{ employee.email }}')" 
-                            class="text-blue-600 hover:text-blue-800 mr-2">Edit</button>
-                    <button onclick="deleteEmployee('{{ employee.email }}')"
-                            class="text-red-600 hover:text-red-800">Delete</button>
-                </td>
-                {% endif %}
-            </tr>
-            {% endfor %}
-        </tbody>
-    </table>
-</div>
+    <!-- Employees Table -->
+    <div class="bg-white rounded-lg shadow-md overflow-hidden">
+        <table class="min-w-full">
+            <thead class="bg-gray-50">
+                <tr>
+                    <th class="px-6 py-3 text-left text-gray-700">Name</th>
+                    <th class="px-6 py-3 text-left text-gray-700">Email</th>
+                    <th class="px-6 py-3 text-left text-gray-700">Department</th>
+                    <th class="px-6 py-3 text-left text-gray-700">Position</th>
+                    <th class="px-6 py-3 text-left text-gray-700">Admin</th>
+                    <th class="px-6 py-3 text-left text-gray-700">Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for employee in employees %}
+                <tr class="border-t">
+                    <td class="px-6 py-4">{{ employee.name }}</td>
+                    <td class="px-6 py-4">{{ employee.email }}</td>
+                    <td class="px-6 py-4">{{ employee.department }}</td>
+                    <td class="px-6 py-4">{{ employee.position }}</td>
+                    <td class="px-6 py-4">
+                        {% if employee.is_admin %}
+                            <span class="bg-green-100 text-green-800 px-2 py-1 rounded-full text-sm">Yes</span>
+                        {% else %}
+                            <span class="bg-gray-100 text-gray-800 px-2 py-1 rounded-full text-sm">No</span>
+                        {% endif %}
+                    </td>
+                    <td class="px-6 py-4">
+                        <button onclick="editEmployee('{{ employee|tojson }}')" class="text-blue-600 hover:text-blue-900 mr-4">Edit</button>
+                        <button onclick="deleteEmployee('{{ employee.email }}')" class="text-red-600 hover:text-red-900">Delete</button>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
 
-<!-- Create Employee Modal -->
-<div id="createEmployeeModal" class="hidden fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full">
-    <div class="relative top-20 mx-auto p-5 border w-96 shadow-lg rounded-md bg-white">
-        <div class="mt-3">
-            <h3 class="text-lg font-medium leading-6 text-gray-900 mb-4">Create New Employee</h3>
-            <form method="POST" action="{{ url_for('employees') }}">
-                <div class="mb-4">
-                    <label class="block text-gray-700 text-sm font-bold mb-2">Name</label>
-                    <input type="text" name="name" class="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700" required>
-                </div>
-                <div class="mb-4">
-                    <label class="block text-gray-700 text-sm font-bold mb-2">Email</label>
-                    <input type="email" name="email" class="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700" required>
-                </div>
-                <div class="mb-4">
-                    <label class="block text-gray-700 text-sm font-bold mb-2">Password</label>
-                    <input type="password" name="password" class="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700" required>
-                </div>
-                <div class="mb-4">
-                    <label class="block text-gray-700 text-sm font-bold mb-2">Department</label>
-                    <input type="text" name="department" class="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700" required>
-                </div>
-                <div class="mb-4">
-                    <label class="block text-gray-700 text-sm font-bold mb-2">Position</label>
-                    <input type="text" name="position" class="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700" required>
-                </div>
-                <div class="mb-4">
-                    <label class="flex items-center">
-                        <input type="checkbox" name="is_admin" class="form-checkbox">
-                        <span class="ml-2">Admin Access</span>
-                    </label>
-                </div>
-                <div class="flex justify-end space-x-4">
-                    <button type="button" 
-                            onclick="document.getElementById('createEmployeeModal').classList.add('hidden')"
-                            class="bg-gray-500 hover:bg-gray-700 text-white font-bold py-2 px-4 rounded">
-                        Cancel
-                    </button>
-                    <button type="submit" 
-                            class="bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded">
-                        Create
-                    </button>
-                </div>
-            </form>
+    <!-- Add Employee Modal -->
+    <div id="employeeModal" class="hidden fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full">
+        <div class="relative top-20 mx-auto p-5 border w-96 shadow-lg rounded-md bg-white">
+            <div class="mt-3">
+                <h3 class="text-lg font-medium leading-6 text-gray-900 mb-4" id="modalTitle">Add Employee</h3>
+                <form id="employeeForm" method="POST">
+                    <input type="hidden" id="employeeId" name="employee_id">
+                    <div class="mb-4">
+                        <label class="block text-gray-700 text-sm font-bold mb-2">Name</label>
+                        <input type="text" name="name" id="empName" class="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700" required>
+                    </div>
+                    <div class="mb-4">
+                        <label class="block text-gray-700 text-sm font-bold mb-2">Email</label>
+                        <input type="email" name="email" id="empEmail" class="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700" required>
+                    </div>
+                    <div class="mb-4">
+                        <label class="block text-gray-700 text-sm font-bold mb-2">Password</label>
+                        <input type="password" name="password" id="empPassword" class="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700" required>
+                    </div>
+                    <div class="mb-4">
+                        <label class="block text-gray-700 text-sm font-bold mb-2">Department</label>
+                        <input type="text" name="department" id="empDepartment" class="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700" required>
+                    </div>
+                    <div class="mb-4">
+                        <label class="block text-gray-700 text-sm font-bold mb-2">Position</label>
+                        <input type="text" name="position" id="empPosition" class="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700" required>
+                    </div>
+                    <div class="mb-4">
+                        <label class="flex items-center">
+                            <input type="checkbox" name="is_admin" id="empIsAdmin" class="mr-2">
+                            <span class="text-gray-700 text-sm font-bold">Admin Access</span>
+                        </label>
+                    </div>
+                    <div class="flex justify-end space-x-4">
+                        <button type="button" onclick="hideEmployeeModal()" 
+                                class="bg-gray-500 hover:bg-gray-700 text-white font-bold py-2 px-4 rounded">
+                            Cancel
+                        </button>
+                        <button type="submit" class="bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded">
+                            Save
+                        </button>
+                    </div>
+                </form>
+            </div>
         </div>
     </div>
 </div>
 
 <script>
-function editEmployee(email) {
-    // Implement edit functionality
-    alert('Edit employee: ' + email);
+function showAddEmployeeModal() {
+    document.getElementById('modalTitle').textContent = 'Add Employee';
+    document.getElementById('employeeForm').reset();
+    document.getElementById('employeeModal').classList.remove('hidden');
+}
+
+function hideEmployeeModal() {
+    document.getElementById('employeeModal').classList.add('hidden');
+}
+
+function editEmployee(employeeData) {
+    const employee = JSON.parse(employeeData);
+    document.getElementById('modalTitle').textContent = 'Edit Employee';
+    document.getElementById('employeeId').value = employee.employee_id;
+    document.getElementById('empName').value = employee.name;
+    document.getElementById('empEmail').value = employee.email;
+    document.getElementById('empDepartment').value = employee.department;
+    document.getElementById('empPosition').value = employee.position;
+    document.getElementById('empIsAdmin').checked = employee.is_admin;
+    document.getElementById('empPassword').required = false;
+    document.getElementById('employeeModal').classList.remove('hidden');
 }
 
 function deleteEmployee(email) {
     if (confirm('Are you sure you want to delete this employee?')) {
-        fetch('/employees/delete/' + email, {
+        fetch(`/employees/delete/${email}`, {
             method: 'POST'
         }).then(response => {
             if (response.ok) {
