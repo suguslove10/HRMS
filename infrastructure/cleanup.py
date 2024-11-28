@@ -10,7 +10,6 @@ class HRMSCleanup:
         self.region = region
         self.dynamodb = boto3.client('dynamodb', region_name=region)
         self.s3 = boto3.client('s3', region_name=region)
-        self.lambda_client = boto3.client('lambda', region_name=region)
         self.iam = boto3.client('iam', region_name=region)
         
     def confirm_cleanup(self):
@@ -45,51 +44,53 @@ class HRMSCleanup:
     def empty_and_delete_s3_bucket(self, bucket_name):
         print(f"\n🗑️  Cleaning up S3 bucket: {bucket_name}")
         try:
-            # Delete all object versions first
-            paginator = self.s3.get_paginator('list_object_versions')
-            try:
-                for page in paginator.paginate(Bucket=bucket_name):
-                    delete_keys = []
-                    if 'Versions' in page:
-                        delete_keys.extend([
-                            {'Key': obj['Key'], 'VersionId': obj['VersionId']}
-                            for obj in page['Versions']
-                        ])
-                    if 'DeleteMarkers' in page:
-                        delete_keys.extend([
-                            {'Key': obj['Key'], 'VersionId': obj['VersionId']}
-                            for obj in page['DeleteMarkers']
-                        ])
-                    
-                    if delete_keys:
-                        self.s3.delete_objects(
-                            Bucket=bucket_name,
-                            Delete={'Objects': delete_keys}
-                        )
-                        print(f"  ✓ Deleted {len(delete_keys)} object versions")
-            except ClientError:
-                # Bucket might not have versioning enabled
-                pass
-
-            # Delete remaining objects
-            paginator = self.s3.get_paginator('list_objects_v2')
-            for page in paginator.paginate(Bucket=bucket_name):
-                if 'Contents' in page:
-                    objects = [{'Key': obj['Key']} for obj in page['Contents']]
-                    self.s3.delete_objects(
-                        Bucket=bucket_name,
-                        Delete={'Objects': objects}
-                    )
-                    print(f"  ✓ Deleted {len(objects)} objects")
-            
-            # Remove bucket policy and CORS if they exist
+            # Remove bucket policy
             try:
                 self.s3.delete_bucket_policy(Bucket=bucket_name)
                 self.s3.delete_bucket_cors(Bucket=bucket_name)
             except ClientError:
                 pass
 
-            # Remove public access block
+            # Delete all versions
+            try:
+                paginator = self.s3.get_paginator('list_object_versions')
+                for page in paginator.paginate(Bucket=bucket_name):
+                    versions = []
+                    if 'Versions' in page:
+                        versions.extend(
+                            {'Key': obj['Key'], 'VersionId': obj['VersionId']}
+                            for obj in page['Versions']
+                        )
+                    if 'DeleteMarkers' in page:
+                        versions.extend(
+                            {'Key': obj['Key'], 'VersionId': obj['VersionId']}
+                            for obj in page['DeleteMarkers']
+                        )
+                    
+                    if versions:
+                        self.s3.delete_objects(
+                            Bucket=bucket_name,
+                            Delete={'Objects': versions}
+                        )
+                        print(f"  ✓ Deleted {len(versions)} object versions")
+            except ClientError:
+                pass
+
+            # Delete remaining objects
+            try:
+                paginator = self.s3.get_paginator('list_objects_v2')
+                for page in paginator.paginate(Bucket=bucket_name):
+                    if 'Contents' in page:
+                        objects = [{'Key': obj['Key']} for obj in page['Contents']]
+                        self.s3.delete_objects(
+                            Bucket=bucket_name,
+                            Delete={'Objects': objects}
+                        )
+                        print(f"  ✓ Deleted {len(objects)} objects")
+            except ClientError:
+                pass
+
+            # Reset public access block
             try:
                 self.s3.put_public_access_block(
                     Bucket=bucket_name,
@@ -103,8 +104,8 @@ class HRMSCleanup:
             except ClientError:
                 pass
 
-            # Finally delete the bucket
-            time.sleep(2)  # Wait for configurations to propagate
+            # Delete bucket
+            time.sleep(2)
             self.s3.delete_bucket(Bucket=bucket_name)
             print(f"  ✓ Bucket {bucket_name} deleted successfully")
             
@@ -113,55 +114,6 @@ class HRMSCleanup:
                 print(f"  ℹ️  Bucket {bucket_name} does not exist")
             else:
                 print(f"  ❌ Error deleting bucket {bucket_name}: {str(e)}")
-
-    def delete_lambda_functions(self):
-        functions = ['employee_handler', 'leave_handler', 'document_handler']
-        
-        print("\n🗑️  Cleaning up Lambda functions...")
-        for function_name in functions:
-            try:
-                self.lambda_client.delete_function(FunctionName=function_name)
-                print(f"  ✓ Function {function_name} deleted successfully")
-                time.sleep(2)
-                
-            except ClientError as e:
-                if e.response['Error']['Code'] == 'ResourceNotFoundException':
-                    print(f"  ℹ️  Function {function_name} does not exist")
-                else:
-                    print(f"  ❌ Error deleting function {function_name}: {str(e)}")
-
-    def delete_iam_role(self):
-        role_name = 'hrms-lambda-role'
-        
-        print("\n🗑️  Cleaning up IAM role...")
-        try:
-            # Detach policies first
-            policies = [
-                'arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole',
-                'arn:aws:iam::aws:policy/AmazonDynamoDBFullAccess',
-                'arn:aws:iam::aws:policy/AmazonS3FullAccess'
-            ]
-            
-            for policy in policies:
-                try:
-                    self.iam.detach_role_policy(
-                        RoleName=role_name,
-                        PolicyArn=policy
-                    )
-                    print(f"  ✓ Detached policy: {policy}")
-                except ClientError as e:
-                    if e.response['Error']['Code'] != 'NoSuchEntity':
-                        print(f"  ❌ Error detaching policy {policy}: {str(e)}")
-            
-            time.sleep(2)
-            self.iam.delete_role(RoleName=role_name)
-            print(f"  ✓ Role {role_name} deleted successfully")
-            
-        except ClientError as e:
-            if e.response['Error']['Code'] == 'NoSuchEntity':
-                print(f"  ℹ️  Role {role_name} does not exist")
-            else:
-                print(f"  ❌ Error deleting role {role_name}: {str(e)}")
 
     def cleanup_local_files(self):
         print("\n🗑️  Cleaning up local configuration files...")
@@ -187,8 +139,6 @@ def main():
         
         print("\n🚀 Starting HRMS cleanup process...")
         
-        cleanup.delete_lambda_functions()
-        cleanup.delete_iam_role()
         cleanup.empty_and_delete_s3_bucket('hrms-documents-bucket')
         cleanup.delete_dynamodb_tables()
         cleanup.cleanup_local_files()
