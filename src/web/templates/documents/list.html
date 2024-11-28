@@ -1,7 +1,7 @@
 {% extends "base.html" %}
 {% block title %}Documents{% endblock %}
 {% block content %}
-<div class="container mx-auto p-4">
+<div class="container mx-auto px-4">
     <div class="mb-6 flex justify-between items-center">
         <h2 class="text-2xl font-bold">Documents</h2>
         <button onclick="document.getElementById('uploadModal').classList.remove('hidden')" 
@@ -29,10 +29,12 @@
                     <td class="px-6 py-4">{{ doc.description }}</td>
                     <td class="px-6 py-4">{{ doc.employee_name }}</td>
                     <td class="px-6 py-4">{{ doc.created_at|format_date }}</td>
-                    <td class="px-6 py-4">
-                        <a href="{{ doc.download_url }}" class="text-blue-600 hover:text-blue-900 mr-4" target="_blank">Download</a>
-                        {% if session.user_id == doc.employee_id or session.is_admin %}
-                        <button onclick="deleteDocument('{{ doc.document_id }}')" 
+                    <td class="px-6 py-4 space-x-2">
+                        <a href="{{ doc.download_url }}" 
+                           class="text-blue-600 hover:text-blue-900"
+                           target="_blank">Download</a>
+                        {% if session.user_id == doc.employee_id or is_admin %}
+                        <button onclick="deleteDocument('{{ doc.document_id }}')"
                                 class="text-red-600 hover:text-red-900">Delete</button>
                         {% endif %}
                     </td>
