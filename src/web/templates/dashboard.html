@@ -1,0 +1,154 @@
+{% extends "base.html" %}
+{% block title %}Dashboard{% endblock %}
+{% block content %}
+<div class="container mx-auto px-4">
+    <!-- Welcome Section -->
+    <div class="mb-8">
+        <h1 class="text-3xl font-bold text-gray-800">Welcome, {{ user_name }}!</h1>
+        <p class="text-gray-600 mt-2">Here's your overview for today</p>
+    </div>
+
+    <!-- Quick Stats Grid -->
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+        <!-- Leave Balance Card -->
+        <div class="bg-white rounded-lg shadow-md p-6">
+            <div class="flex items-center justify-between">
+                <div>
+                    <h3 class="text-lg font-semibold text-gray-800">Leave Balance</h3>
+                    <p class="text-3xl font-bold text-blue-600 mt-2">15 days</p>
+                </div>
+                <div class="bg-blue-100 rounded-full p-3">
+                    <i class="fas fa-calendar text-blue-600 text-xl"></i>
+                </div>
+            </div>
+            <a href="{{ url_for('leave_requests') }}" class="text-blue-600 hover:text-blue-800 text-sm mt-4 inline-block">
+                View Leave History →
+            </a>
+        </div>
+
+        <!-- Documents Card -->
+        <div class="bg-white rounded-lg shadow-md p-6">
+            <div class="flex items-center justify-between">
+                <div>
+                    <h3 class="text-lg font-semibold text-gray-800">Documents</h3>
+                    <p class="text-3xl font-bold text-green-600 mt-2">5</p>
+                </div>
+                <div class="bg-green-100 rounded-full p-3">
+                    <i class="fas fa-file-alt text-green-600 text-xl"></i>
+                </div>
+            </div>
+            <a href="{{ url_for('documents') }}" class="text-green-600 hover:text-green-800 text-sm mt-4 inline-block">
+                Manage Documents →
+            </a>
+        </div>
+
+        {% if is_admin %}
+        <!-- Employees Card (Admin Only) -->
+        <div class="bg-white rounded-lg shadow-md p-6">
+            <div class="flex items-center justify-between">
+                <div>
+                    <h3 class="text-lg font-semibold text-gray-800">Total Employees</h3>
+                    <p class="text-3xl font-bold text-purple-600 mt-2">25</p>
+                </div>
+                <div class="bg-purple-100 rounded-full p-3">
+                    <i class="fas fa-users text-purple-600 text-xl"></i>
+                </div>
+            </div>
+            <a href="{{ url_for('employees') }}" class="text-purple-600 hover:text-purple-800 text-sm mt-4 inline-block">
+                View All Employees →
+            </a>
+        </div>
+        {% else %}
+        <!-- Profile Card (Regular Users) -->
+        <div class="bg-white rounded-lg shadow-md p-6">
+            <div class="flex items-center justify-between">
+                <div>
+                    <h3 class="text-lg font-semibold text-gray-800">My Profile</h3>
+                    <p class="text-gray-600 mt-2">{{ session.get('email') }}</p>
+                </div>
+                <div class="bg-gray-100 rounded-full p-3">
+                    <i class="fas fa-user text-gray-600 text-xl"></i>
+                </div>
+            </div>
+            <button class="text-gray-600 hover:text-gray-800 text-sm mt-4 inline-block">
+                View Profile →
+            </button>
+        </div>
+        {% endif %}
+    </div>
+
+    <!-- Recent Activity Section -->
+    <div class="bg-white rounded-lg shadow-md p-6">
+        <h2 class="text-xl font-bold text-gray-800 mb-4">Recent Activity</h2>
+        <div class="space-y-4">
+            <div class="flex items-center p-4 bg-gray-50 rounded-lg">
+                <div class="bg-blue-100 rounded-full p-2 mr-4">
+                    <i class="fas fa-calendar-check text-blue-600"></i>
+                </div>
+                <div>
+                    <p class="text-gray-800 font-semibold">Leave Request Submitted</p>
+                    <p class="text-gray-600 text-sm">2 days ago</p>
+                </div>
+            </div>
+            <div class="flex items-center p-4 bg-gray-50 rounded-lg">
+                <div class="bg-green-100 rounded-full p-2 mr-4">
+                    <i class="fas fa-file-upload text-green-600"></i>
+                </div>
+                <div>
+                    <p class="text-gray-800 font-semibold">Document Uploaded</p>
+                    <p class="text-gray-600 text-sm">5 days ago</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Quick Actions Section -->
+    <div class="mt-8 grid grid-cols-1 md:grid-cols-2 gap-6">
+        <div class="bg-white rounded-lg shadow-md p-6">
+            <h2 class="text-xl font-bold text-gray-800 mb-4">Quick Actions</h2>
+            <div class="grid grid-cols-2 gap-4">
+                <button onclick="location.href='{{ url_for('leave_requests') }}'" 
+                        class="flex items-center justify-center p-4 bg-blue-50 rounded-lg hover:bg-blue-100 transition-colors">
+                    <i class="fas fa-plus mr-2 text-blue-600"></i>
+                    <span class="text-blue-600">New Leave Request</span>
+                </button>
+                <button onclick="location.href='{{ url_for('documents') }}'"
+                        class="flex items-center justify-center p-4 bg-green-50 rounded-lg hover:bg-green-100 transition-colors">
+                    <i class="fas fa-upload mr-2 text-green-600"></i>
+                    <span class="text-green-600">Upload Document</span>
+                </button>
+            </div>
+        </div>
+        
+        <div class="bg-white rounded-lg shadow-md p-6">
+            <h2 class="text-xl font-bold text-gray-800 mb-4">Upcoming Holidays</h2>
+            <div class="space-y-4">
+                <div class="flex items-center justify-between">
+                    <div>
+                        <p class="font-semibold text-gray-800">Christmas Day</p>
+                        <p class="text-gray-600 text-sm">December 25, 2024</p>
+                    </div>
+                    <span class="bg-red-100 text-red-600 px-3 py-1 rounded-full text-sm">25 days left</span>
+                </div>
+                <div class="flex items-center justify-between">
+                    <div>
+                        <p class="font-semibold text-gray-800">New Year's Day</p>
+                        <p class="text-gray-600 text-sm">January 1, 2025</p>
+                    </div>
+                    <span class="bg-red-100 text-red-600 px-3 py-1 rounded-full text-sm">32 days left</span>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    // Add any dashboard-specific JavaScript here
+    document.addEventListener('DOMContentLoaded', function() {
+        // Initialize any dashboard widgets or charts
+        console.log('Dashboard initialized');
+    });
+</script>
+{% endblock %}
