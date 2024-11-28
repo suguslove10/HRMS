@@ -5,12 +5,11 @@ import os
 from functools import wraps
 from werkzeug.utils import secure_filename
 import requests
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 import uuid
 from dotenv import load_dotenv
 import bcrypt
 
-# Load environment variables
 load_dotenv()
 
 app = Flask(__name__)
@@ -25,13 +24,25 @@ s3_client = boto3.client('s3', region_name=os.getenv('AWS_REGION'))
 def inject_today():
     return {'today': date.today()}
 
+def get_upcoming_holidays():
+    today = date.today()
+    holidays = [
+        {'name': 'Christmas Day', 'date': date(today.year, 12, 25)},
+        {'name': "New Year's Day", 'date': date(today.year + 1, 1, 1)}
+    ]
+    
+    return [{
+        'name': holiday['name'],
+        'date': holiday['date'].strftime('%B %d, %Y'),
+        'days_left': (holiday['date'] - today).days
+    } for holiday in holidays if holiday['date'] >= today]
+
 def hash_password(password):
     return bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt())
 
 def check_password(password, hashed):
     return bcrypt.checkpw(password.encode('utf-8'), hashed.encode('utf-8'))
 
-# Decorators
 def login_required(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
@@ -50,7 +61,6 @@ def admin_required(f):
         return f(*args, **kwargs)
     return decorated_function
 
-# Routes
 @app.route('/')
 def index():
     if 'user_id' in session:
@@ -65,9 +75,7 @@ def login():
         
         try:
             table = dynamodb.Table('Employees')
-            response = table.get_item(
-                Key={'email': email}
-            )
+            response = table.get_item(Key={'email': email})
             
             if 'Item' in response:
                 employee = response['Item']
@@ -88,15 +96,58 @@ def login():
 @app.route('/logout')
 def logout():
     session.clear()
-    flash('You have been logged out successfully', 'success')
+    flash('Logged out successfully', 'success')
     return redirect(url_for('login'))
 
 @app.route('/dashboard')
 @login_required
 def dashboard():
-    return render_template('dashboard.html',
-                         user_name=session.get('user_name'),
-                         is_admin=session.get('is_admin', False))
+    try:
+        stats = {}
+        
+        # Get document count
+        doc_table = dynamodb.Table('Documents')
+        doc_response = doc_table.scan(
+            FilterExpression='employee_id = :eid',
+            ExpressionAttributeValues={':eid': session['user_id']}
+        ) if not session.get('is_admin') else doc_table.scan()
+        stats['documents_count'] = len(doc_response.get('Items', []))
+        
+        # Get employee count (admin only)
+        if session.get('is_admin'):
+            emp_table = dynamodb.Table('Employees')
+            emp_response = emp_table.scan()
+            stats['employees_count'] = len(emp_response.get('Items', []))
+        
+        # Calculate leave balance
+        leave_table = dynamodb.Table('LeaveRequests')
+        leave_response = leave_table.scan(
+            FilterExpression='employee_id = :eid',
+            ExpressionAttributeValues={':eid': session['user_id']}
+        )
+        leave_requests = leave_response.get('Items', [])
+        
+        approved_leaves = sum(
+            (datetime.strptime(req['end_date'], '%Y-%m-%d') - 
+             datetime.strptime(req['start_date'], '%Y-%m-%d')).days + 1
+            for req in leave_requests 
+            if req['status'] == 'APPROVED'
+        )
+        stats['leave_balance'] = 30 - approved_leaves
+        
+        # Get upcoming holidays
+        stats['upcoming_holidays'] = get_upcoming_holidays()
+        
+        return render_template('dashboard.html',
+                           user_name=session.get('user_name'),
+                           is_admin=session.get('is_admin', False),
+                           stats=stats)
+                           
+    except Exception as e:
+        flash(f'Error loading dashboard: {str(e)}', 'error')
+        return render_template('dashboard.html',
+                           user_name=session.get('user_name'),
+                           is_admin=session.get('is_admin', False))
 
 @app.route('/employees', methods=['GET', 'POST'])
 @login_required
@@ -108,22 +159,19 @@ def employees():
         try:
             email = request.form['email']
             
-            # Check if email already exists
+            # Check if email exists
             response = table.get_item(Key={'email': email})
             if 'Item' in response:
                 flash('Email already exists', 'error')
                 return redirect(url_for('employees'))
             
-            # Hash the password
-            hashed_password = hash_password(request.form['password']).decode('utf-8')
-            
             employee_data = {
                 'email': email,
                 'employee_id': str(uuid.uuid4()),
                 'name': request.form['name'],
+                'password': hash_password(request.form['password']).decode('utf-8'),
                 'department': request.form['department'],
                 'position': request.form['position'],
-                'password': hashed_password,
                 'is_admin': request.form.get('is_admin') == 'on',
                 'created_at': datetime.now().isoformat(),
                 'created_by': session['email']
@@ -139,7 +187,6 @@ def employees():
     try:
         response = table.scan()
         employees_list = response.get('Items', [])
-        # Remove passwords from the list
         for emp in employees_list:
             emp.pop('password', None)
     except Exception as e:
@@ -150,31 +197,21 @@ def employees():
                          employees=employees_list,
                          is_admin=session.get('is_admin', False))
 
-@app.route('/employees/delete/<email>', methods=['POST'])
-@login_required
-@admin_required
-def delete_employee(email):
-    try:
-        table = dynamodb.Table('Employees')
-        table.delete_item(Key={'email': email})
-        flash('Employee deleted successfully', 'success')
-        return jsonify({'status': 'success'})
-    except Exception as e:
-        flash(f'Error deleting employee: {str(e)}', 'error')
-        return jsonify({'status': 'error', 'message': str(e)}), 500
-
 @app.route('/leave-requests', methods=['GET', 'POST'])
 @login_required
 def leave_requests():
     table = dynamodb.Table('LeaveRequests')
     
     if request.method == 'POST':
+        if session.get('is_admin'):
+            flash('Admins cannot submit leave requests', 'error')
+            return redirect(url_for('leave_requests'))
+            
         try:
             leave_data = {
                 'request_id': str(uuid.uuid4()),
                 'employee_id': session['user_id'],
                 'employee_name': session['user_name'],
-                'email': session['email'],
                 'start_date': request.form['start_date'],
                 'end_date': request.form['end_date'],
                 'reason': request.form['reason'],
@@ -190,11 +227,9 @@ def leave_requests():
         return redirect(url_for('leave_requests'))
     
     try:
-        if session.get('is_admin', False):
-            # Admins can see all requests
+        if session.get('is_admin'):
             response = table.scan()
         else:
-            # Regular users see only their requests
             response = table.scan(
                 FilterExpression='employee_id = :eid',
                 ExpressionAttributeValues={':eid': session['user_id']}
@@ -274,64 +309,51 @@ def documents():
                 s3_key = f"{session['user_id']}/{document_id}/{filename}"
                 
                 # Upload to S3
-                try:
-                    s3_client.upload_fileobj(
-                        file,
-                        os.getenv('S3_BUCKET_NAME'),
-                        s3_key,
-                        ExtraArgs={
-                            'ContentType': file.content_type
-                        }
-                    )
-                    
-                    # Store metadata in DynamoDB
-                    document_data = {
-                        'document_id': document_id,
-                        'employee_id': session['user_id'],
-                        'employee_name': session['user_name'],
-                        'filename': filename,
-                        'description': request.form.get('description', ''),
-                        's3_key': s3_key,
-                        'created_at': datetime.now().isoformat()
-                    }
-                    
-                    table.put_item(Item=document_data)
-                    flash('Document uploaded successfully', 'success')
-                    
-                except Exception as e:
-                    flash(f'Error uploading to S3: {str(e)}', 'error')
-                    return redirect(request.url)
-                    
+                s3_client.upload_fileobj(
+                    file,
+                    os.getenv('S3_BUCKET_NAME'),
+                    s3_key,
+                    ExtraArgs={'ContentType': file.content_type}
+                )
+                
+                # Store metadata
+                document_data = {
+                    'document_id': document_id,
+                    'employee_id': session['user_id'],
+                    'employee_name': session['user_name'],
+                    'filename': filename,
+                    'description': request.form.get('description', ''),
+                    's3_key': s3_key,
+                    'created_at': datetime.now().isoformat()
+                }
+                
+                table.put_item(Item=document_data)
+                flash('Document uploaded successfully', 'success')
+                
         except Exception as e:
             flash(f'Error uploading document: {str(e)}', 'error')
             
         return redirect(url_for('documents'))
     
     try:
-        if session.get('is_admin', False):
+        if session.get('is_admin'):
             response = table.scan()
         else:
             response = table.scan(
                 FilterExpression='employee_id = :eid',
                 ExpressionAttributeValues={':eid': session['user_id']}
             )
-        
         documents_list = response.get('Items', [])
         
         # Generate download URLs
         for doc in documents_list:
-            try:
-                doc['download_url'] = s3_client.generate_presigned_url('get_object',
-                    Params={
-                        'Bucket': os.getenv('S3_BUCKET_NAME'),
-                        'Key': doc['s3_key']
-                    },
-                    ExpiresIn=3600
-                )
-            except Exception as e:
-                print(f"Error generating download URL: {str(e)}")
-                doc['download_url'] = '#'
-                
+            doc['download_url'] = s3_client.generate_presigned_url('get_object',
+                Params={
+                    'Bucket': os.getenv('S3_BUCKET_NAME'),
+                    'Key': doc['s3_key']
+                },
+                ExpiresIn=3600
+            )
     except Exception as e:
         flash(f'Error retrieving documents: {str(e)}', 'error')
         documents_list = []
@@ -345,23 +367,17 @@ def documents():
 def delete_document(document_id):
     try:
         table = dynamodb.Table('Documents')
-        
-        # Get document info
         response = table.get_item(Key={'document_id': document_id})
         
         if 'Item' in response:
             document = response['Item']
             
-            # Check if user owns the document or is admin
-            if document['employee_id'] == session['user_id'] or session.get('is_admin', False):
+            if document['employee_id'] == session['user_id'] or session.get('is_admin'):
                 # Delete from S3
-                try:
-                    s3_client.delete_object(
-                        Bucket=os.getenv('S3_BUCKET_NAME'),
-                        Key=document['s3_key']
-                    )
-                except Exception as e:
-                    print(f"Error deleting from S3: {str(e)}")
+                s3_client.delete_object(
+                    Bucket=os.getenv('S3_BUCKET_NAME'),
+                    Key=document['s3_key']
+                )
                 
                 # Delete from DynamoDB
                 table.delete_item(Key={'document_id': document_id})
@@ -374,10 +390,9 @@ def delete_document(document_id):
         return jsonify({'status': 'error', 'message': 'Document not found'}), 404
         
     except Exception as e:
-        print(f"Error deleting document: {str(e)}")
+        flash(f'Error deleting document: {str(e)}', 'error')
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
-# Template filters
 @app.template_filter('format_date')
 def format_date(date_string):
     try:
