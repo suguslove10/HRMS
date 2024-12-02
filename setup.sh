@@ -12,7 +12,11 @@ source venv/bin/activate
 pip install -r requirements.txt
 
 # Run infrastructure setup
-python infrastructure/infrastructure.py
-
-echo "Setup completed successfully!"
-echo "To start the application, run: python src/web/app.py"
+if python infrastructure/infrastructure.py; then
+    echo "Setup completed successfully!"
+    echo "Starting the application..."
+    python src/web/app.py
+else
+    echo "Setup failed. Please check the errors above."
+    exit 1
+fi
