@@ -2,8 +2,6 @@ import boto3
 import json
 import os
 from botocore.exceptions import ClientError
-import io
-import zipfile
 import secrets
 import time
 from dotenv import load_dotenv
@@ -14,28 +12,48 @@ import bcrypt
 class HRMSInfrastructure:
     def __init__(self, region='ap-south-1'):
         self.region = region
+        # Initialize without credentials - will be loaded from env
         self.dynamodb = boto3.client('dynamodb', region_name=region)
         self.s3 = boto3.client('s3', region_name=region)
         self.iam = boto3.client('iam', region_name=region)
 
-    def generate_env_file(self, credentials):
+    def generate_env_file(self):
         try:
+            # Generate new Flask secret key
             flask_secret_key = secrets.token_hex(24)
-            env_content = f"""AWS_REGION={self.region}
-AWS_ACCESS_KEY_ID={credentials['access_key']}
-AWS_SECRET_ACCESS_KEY={credentials['secret_key']}
+            
+            # Read existing .env file if it exists
+            existing_env = {}
+            if os.path.exists('.env'):
+                with open('.env', 'r') as env_file:
+                    for line in env_file:
+                        if '=' in line:
+                            key, value = line.strip().split('=', 1)
+                            existing_env[key] = value
+                            
+            # Update only FLASK_SECRET_KEY and preserve other values
+            env_content = f"""AWS_REGION={existing_env.get('AWS_REGION', 'ap-south-1')}
+AWS_ACCESS_KEY_ID={existing_env.get('AWS_ACCESS_KEY_ID', '')}
+AWS_SECRET_ACCESS_KEY={existing_env.get('AWS_SECRET_ACCESS_KEY', '')}
 FLASK_SECRET_KEY={flask_secret_key}
-S3_BUCKET_NAME=hrms-documents-bucket
+S3_BUCKET_NAME=your-unique-bucket-name  # Replace with your desired unique bucket name
 FLASK_ENV=development
 FLASK_DEBUG=1"""
             
             with open('.env', 'w') as env_file:
                 env_file.write(env_content)
-            print("Generated .env file with secure Flask secret key")
+            print("\n✅ Updated .env file with new Flask secret key")
+            
+            # Verify AWS credentials exist
+            if not existing_env.get('AWS_ACCESS_KEY_ID') or not existing_env.get('AWS_SECRET_ACCESS_KEY'):
+                print("\n⚠️  WARNING: AWS credentials not found in .env file")
+                print("Please manually add your AWS credentials to the .env file:")
+                print("AWS_ACCESS_KEY_ID=your_access_key")
+                print("AWS_SECRET_ACCESS_KEY=your_secret_key")
         except Exception as e:
-            print(f"Error generating .env file: {str(e)}")
+            print(f"\nError generating .env file: {str(e)}")
             raise
-
+            
     def create_dynamodb_tables(self):
         tables = {
             'Employees': {
@@ -85,6 +103,7 @@ FLASK_DEBUG=1"""
                     raise e
 
     def create_s3_bucket(self, bucket_name):
+        unique_bucket_name = "sugu-doc"  # Replace with your desired unique bucket name
         bucket_policy = {
             "Version": "2012-10-17",
             "Statement": [{
@@ -93,25 +112,25 @@ FLASK_DEBUG=1"""
                 "Principal": "*",
                 "Action": ["s3:*"],
                 "Resource": [
-                    f"arn:aws:s3:::{bucket_name}",
-                    f"arn:aws:s3:::{bucket_name}/*"
+                    f"arn:aws:s3:::{unique_bucket_name}",
+                    f"arn:aws:s3:::{unique_bucket_name}/*"
                 ]
             }]
         }
 
         try:
             if self.region == 'us-east-1':
-                self.s3.create_bucket(Bucket=bucket_name)
+                self.s3.create_bucket(Bucket=unique_bucket_name)
             else:
                 self.s3.create_bucket(
-                    Bucket=bucket_name,
+                    Bucket=unique_bucket_name,
                     CreateBucketConfiguration={'LocationConstraint': self.region}
                 )
 
             # Configure bucket permissions
-            self.s3.put_bucket_policy(Bucket=bucket_name, Policy=json.dumps(bucket_policy))
+            self.s3.put_bucket_policy(Bucket=unique_bucket_name, Policy=json.dumps(bucket_policy))
             self.s3.put_public_access_block(
-                Bucket=bucket_name,
+                Bucket=unique_bucket_name,
                 PublicAccessBlockConfiguration={
                     'BlockPublicAcls': False,
                     'IgnorePublicAcls': False,
@@ -129,13 +148,14 @@ FLASK_DEBUG=1"""
                     'ExposeHeaders': []
                 }]
             }
-            self.s3.put_bucket_cors(Bucket=bucket_name, CORSConfiguration=cors_config)
+            self.s3.put_bucket_cors(Bucket=unique_bucket_name, CORSConfiguration=cors_config)
 
-            print(f"Created S3 bucket {bucket_name}")
+            print(f"Created S3 bucket {unique_bucket_name}")
         except ClientError as e:
             if e.response['Error']['Code'] in ['BucketAlreadyExists', 'BucketAlreadyOwnedByYou']:
-                print(f"Bucket {bucket_name} already exists")
+                print(f"Bucket {unique_bucket_name} already exists")
             else:
+                print(f"Error creating S3 bucket: {e}")
                 raise e
 
     def create_default_admin(self):
@@ -159,22 +179,17 @@ FLASK_DEBUG=1"""
         except Exception as e:
             print(f"Error creating default admin: {str(e)}")
             raise
-
+            
 def main():
     try:
-        credentials = {
-            'access_key': 'youraccesskey',
-            'secret_key': 'yoursecretkey'
-        }
-
         hrms = HRMSInfrastructure()
         
         os.makedirs('infrastructure', exist_ok=True)
         os.makedirs('src/lambda', exist_ok=True)
         
-        hrms.generate_env_file(credentials)
+        hrms.generate_env_file()
         hrms.create_dynamodb_tables()
-        hrms.create_s3_bucket('hrms-documents-bucket')
+        hrms.create_s3_bucket('sugu-doc')  # Replace with your desired unique bucket name
         hrms.create_default_admin()
 
         print("\nHRMS infrastructure setup completed successfully!")
