@@ -12,17 +12,14 @@ import bcrypt
 class HRMSInfrastructure:
     def __init__(self, region='ap-south-1'):
         self.region = region
-        # Initialize without credentials - will be loaded from env
         self.dynamodb = boto3.client('dynamodb', region_name=region)
         self.s3 = boto3.client('s3', region_name=region)
         self.iam = boto3.client('iam', region_name=region)
 
     def generate_env_file(self):
         try:
-            # Generate new Flask secret key
             flask_secret_key = secrets.token_hex(24)
             
-            # Read existing .env file if it exists
             existing_env = {}
             if os.path.exists('.env'):
                 with open('.env', 'r') as env_file:
@@ -31,12 +28,11 @@ class HRMSInfrastructure:
                             key, value = line.strip().split('=', 1)
                             existing_env[key] = value
                             
-            # Update only FLASK_SECRET_KEY and preserve other values
             env_content = f"""AWS_REGION={existing_env.get('AWS_REGION', 'ap-south-1')}
 AWS_ACCESS_KEY_ID={existing_env.get('AWS_ACCESS_KEY_ID', '')}
 AWS_SECRET_ACCESS_KEY={existing_env.get('AWS_SECRET_ACCESS_KEY', '')}
 FLASK_SECRET_KEY={flask_secret_key}
-S3_BUCKET_NAME=your-unique-bucket-name  # Replace with your desired unique bucket name
+S3_BUCKET_NAME=sugu-doc-private
 FLASK_ENV=development
 FLASK_DEBUG=1"""
             
@@ -44,7 +40,6 @@ FLASK_DEBUG=1"""
                 env_file.write(env_content)
             print("\n✅ Updated .env file with new Flask secret key")
             
-            # Verify AWS credentials exist
             if not existing_env.get('AWS_ACCESS_KEY_ID') or not existing_env.get('AWS_SECRET_ACCESS_KEY'):
                 print("\n⚠️  WARNING: AWS credentials not found in .env file")
                 print("Please manually add your AWS credentials to the .env file:")
@@ -53,7 +48,7 @@ FLASK_DEBUG=1"""
         except Exception as e:
             print(f"\nError generating .env file: {str(e)}")
             raise
-            
+
     def create_dynamodb_tables(self):
         tables = {
             'Employees': {
@@ -103,22 +98,10 @@ FLASK_DEBUG=1"""
                     raise e
 
     def create_s3_bucket(self, bucket_name):
-        unique_bucket_name = "sugu-doc"  # Replace with your desired unique bucket name
-        bucket_policy = {
-            "Version": "2012-10-17",
-            "Statement": [{
-                "Sid": "FullAccess",
-                "Effect": "Allow",
-                "Principal": "*",
-                "Action": ["s3:*"],
-                "Resource": [
-                    f"arn:aws:s3:::{unique_bucket_name}",
-                    f"arn:aws:s3:::{unique_bucket_name}/*"
-                ]
-            }]
-        }
-
+        unique_bucket_name = "sugu-doc-private"
+        
         try:
+            # Create bucket with private access by default
             if self.region == 'us-east-1':
                 self.s3.create_bucket(Bucket=unique_bucket_name)
             else:
@@ -127,30 +110,56 @@ FLASK_DEBUG=1"""
                     CreateBucketConfiguration={'LocationConstraint': self.region}
                 )
 
-            # Configure bucket permissions
-            self.s3.put_bucket_policy(Bucket=unique_bucket_name, Policy=json.dumps(bucket_policy))
-            self.s3.put_public_access_block(
+            # Enable server-side encryption
+            self.s3.put_bucket_encryption(
                 Bucket=unique_bucket_name,
-                PublicAccessBlockConfiguration={
-                    'BlockPublicAcls': False,
-                    'IgnorePublicAcls': False,
-                    'BlockPublicPolicy': False,
-                    'RestrictPublicBuckets': False
+                ServerSideEncryptionConfiguration={
+                    'Rules': [
+                        {
+                            'ApplyServerSideEncryptionByDefault': {
+                                'SSEAlgorithm': 'AES256'
+                            }
+                        }
+                    ]
                 }
             )
 
-            # Enable CORS
-            cors_config = {
-                'CORSRules': [{
-                    'AllowedHeaders': ['*'],
-                    'AllowedMethods': ['GET', 'PUT', 'POST', 'DELETE'],
-                    'AllowedOrigins': ['*'],
-                    'ExposeHeaders': []
-                }]
-            }
-            self.s3.put_bucket_cors(Bucket=unique_bucket_name, CORSConfiguration=cors_config)
+            # Enable versioning
+            self.s3.put_bucket_versioning(
+                Bucket=unique_bucket_name,
+                VersioningConfiguration={'Status': 'Enabled'}
+            )
 
-            print(f"Created S3 bucket {unique_bucket_name}")
+            # Set private access only
+            block_public_access = {
+                'BlockPublicAcls': True,
+                'IgnorePublicAcls': True,
+                'BlockPublicPolicy': True,
+                'RestrictPublicBuckets': True
+            }
+            self.s3.put_public_access_block(
+                Bucket=unique_bucket_name,
+                PublicAccessBlockConfiguration=block_public_access
+            )
+
+            # Set lifecycle policy
+            self.s3.put_bucket_lifecycle_configuration(
+                Bucket=unique_bucket_name,
+                LifecycleConfiguration={
+                    'Rules': [
+                        {
+                            'ID': 'CleanupOldVersions',
+                            'Status': 'Enabled',
+                            'NoncurrentVersionExpiration': {
+                                'NoncurrentDays': 30
+                            },
+                            'Filter': {}  # Required empty filter
+                        }
+                    ]
+                }
+            )
+
+            print(f"Created private S3 bucket {unique_bucket_name} with enhanced security")
         except ClientError as e:
             if e.response['Error']['Code'] in ['BucketAlreadyExists', 'BucketAlreadyOwnedByYou']:
                 print(f"Bucket {unique_bucket_name} already exists")
@@ -189,7 +198,7 @@ def main():
         
         hrms.generate_env_file()
         hrms.create_dynamodb_tables()
-        hrms.create_s3_bucket('sugu-doc')  # Replace with your desired unique bucket name
+        hrms.create_s3_bucket('sugu-doc-private')
         hrms.create_default_admin()
 
         print("\nHRMS infrastructure setup completed successfully!")
