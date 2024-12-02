@@ -44,68 +44,32 @@ class HRMSCleanup:
     def empty_and_delete_s3_bucket(self, bucket_name):
         print(f"\n🗑️  Cleaning up S3 bucket: {bucket_name}")
         try:
-            # Remove bucket policy
-            try:
-                self.s3.delete_bucket_policy(Bucket=bucket_name)
-                self.s3.delete_bucket_cors(Bucket=bucket_name)
-            except ClientError:
-                pass
+            # Empty the bucket
+            print(f"  ⏳ Emptying bucket {bucket_name}...")
+            paginator = self.s3.get_paginator('list_object_versions')
+            page_iterator = paginator.paginate(Bucket=bucket_name)
 
-            # Delete all versions
-            try:
-                paginator = self.s3.get_paginator('list_object_versions')
-                for page in paginator.paginate(Bucket=bucket_name):
-                    versions = []
-                    if 'Versions' in page:
-                        versions.extend(
-                            {'Key': obj['Key'], 'VersionId': obj['VersionId']}
-                            for obj in page['Versions']
-                        )
-                    if 'DeleteMarkers' in page:
-                        versions.extend(
-                            {'Key': obj['Key'], 'VersionId': obj['VersionId']}
-                            for obj in page['DeleteMarkers']
-                        )
-                    
-                    if versions:
-                        self.s3.delete_objects(
-                            Bucket=bucket_name,
-                            Delete={'Objects': versions}
-                        )
-                        print(f"  ✓ Deleted {len(versions)} object versions")
-            except ClientError:
-                pass
+            delete_us = dict(Objects=[])
+            for page in page_iterator:
+                if 'Versions' in page:
+                    for version in page['Versions']:
+                        delete_us['Objects'].append(dict(Key=version['Key'], VersionId=version['VersionId']))
 
-            # Delete remaining objects
-            try:
-                paginator = self.s3.get_paginator('list_objects_v2')
-                for page in paginator.paginate(Bucket=bucket_name):
-                    if 'Contents' in page:
-                        objects = [{'Key': obj['Key']} for obj in page['Contents']]
-                        self.s3.delete_objects(
-                            Bucket=bucket_name,
-                            Delete={'Objects': objects}
-                        )
-                        print(f"  ✓ Deleted {len(objects)} objects")
-            except ClientError:
-                pass
+                if 'DeleteMarkers' in page:
+                    for marker in page['DeleteMarkers']:
+                        delete_us['Objects'].append(dict(Key=marker['Key'], VersionId=marker['VersionId']))
+                        
+                if len(delete_us['Objects']) >= 1000:
+                    self.s3.delete_objects(Bucket=bucket_name, Delete=delete_us)
+                    delete_us = dict(Objects=[])
 
-            # Reset public access block
-            try:
-                self.s3.put_public_access_block(
-                    Bucket=bucket_name,
-                    PublicAccessBlockConfiguration={
-                        'BlockPublicAcls': False,
-                        'IgnorePublicAcls': False,
-                        'BlockPublicPolicy': False,
-                        'RestrictPublicBuckets': False
-                    }
-                )
-            except ClientError:
-                pass
-
-            # Delete bucket
-            time.sleep(2)
+            if len(delete_us['Objects']):
+                self.s3.delete_objects(Bucket=bucket_name, Delete=delete_us)
+            
+            print(f"  ✓ Bucket {bucket_name} emptied successfully")
+            
+            # Delete the bucket
+            print(f"  ⏳ Deleting bucket {bucket_name}...")
             self.s3.delete_bucket(Bucket=bucket_name)
             print(f"  ✓ Bucket {bucket_name} deleted successfully")
             
@@ -113,11 +77,11 @@ class HRMSCleanup:
             if e.response['Error']['Code'] == 'NoSuchBucket':
                 print(f"  ℹ️  Bucket {bucket_name} does not exist")
             else:
-                print(f"  ❌ Error deleting bucket {bucket_name}: {str(e)}")
+                print(f"  ❌ Error cleaning up bucket {bucket_name}: {str(e)}")
 
     def cleanup_local_files(self):
         print("\n🗑️  Cleaning up local configuration files...")
-        files_to_delete = ['.env', 'infrastructure/config.json']
+        files_to_delete = ['.env']
         
         for file_path in files_to_delete:
             try:
@@ -139,7 +103,7 @@ def main():
         
         print("\n🚀 Starting HRMS cleanup process...")
         
-        cleanup.empty_and_delete_s3_bucket('hrms-documents-bucket')
+        cleanup.empty_and_delete_s3_bucket('sugu-doc-private')
         cleanup.delete_dynamodb_tables()
         cleanup.cleanup_local_files()
         
