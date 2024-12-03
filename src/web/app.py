@@ -1,4 +1,6 @@
-from flask import Flask, render_template, request, jsonify, session, redirect, url_for, flash
+
+from flask import Flask, render_template, request, jsonify, session, redirect, url_for, flash, send_file, make_response
+import io
 import boto3
 import json
 import os
@@ -9,6 +11,7 @@ from datetime import datetime, date, timedelta
 import uuid
 from dotenv import load_dotenv
 import bcrypt
+from flask import make_response
 
 load_dotenv()
 
@@ -36,6 +39,29 @@ def get_upcoming_holidays():
         'date': holiday['date'].strftime('%B %d, %Y'),
         'days_left': (holiday['date'] - today).days
     } for holiday in holidays if holiday['date'] >= today]
+
+def get_leave_balance(employee_id):
+    try:
+        table = dynamodb.Table('LeaveRequests')
+        response = table.scan(
+            FilterExpression='employee_id = :eid AND #status = :status',
+            ExpressionAttributeNames={'#status': 'status'},
+            ExpressionAttributeValues={
+                ':eid': employee_id,
+                ':status': 'APPROVED'
+            }
+        )
+        
+        total_days_taken = sum(
+            (datetime.strptime(req['end_date'], '%Y-%m-%d') - 
+             datetime.strptime(req['start_date'], '%Y-%m-%d')).days + 1
+            for req in response.get('Items', [])
+        )
+        
+        return 30 - total_days_taken  # Assuming 30 days annual leave
+    except Exception as e:
+        print(f"Error calculating leave balance: {e}")
+        return 0
 
 def hash_password(password):
     return bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt())
@@ -84,6 +110,7 @@ def login():
                     session['user_name'] = employee['name']
                     session['email'] = employee['email']
                     session['is_admin'] = employee.get('is_admin', False)
+                    session['department'] = employee.get('department', 'General')
                     flash('Login successful!', 'success')
                     return redirect(url_for('dashboard'))
             
@@ -119,21 +146,37 @@ def dashboard():
             emp_response = emp_table.scan()
             stats['employees_count'] = len(emp_response.get('Items', []))
         
-        # Calculate leave balance
+        # Get leave balance
+        stats['leave_balance'] = get_leave_balance(session['user_id'])
+        
+        # Get recent activity
+        activity = []
+        
+        # Get recent leave requests
         leave_table = dynamodb.Table('LeaveRequests')
         leave_response = leave_table.scan(
             FilterExpression='employee_id = :eid',
             ExpressionAttributeValues={':eid': session['user_id']}
         )
-        leave_requests = leave_response.get('Items', [])
-        
-        approved_leaves = sum(
-            (datetime.strptime(req['end_date'], '%Y-%m-%d') - 
-             datetime.strptime(req['start_date'], '%Y-%m-%d')).days + 1
-            for req in leave_requests 
-            if req['status'] == 'APPROVED'
-        )
-        stats['leave_balance'] = 30 - approved_leaves
+        for item in leave_response.get('Items', []):
+            activity.append({
+                'type': 'leave_request',
+                'status': item['status'],
+                'date': item['created_at'],
+                'description': f"Leave request from {item['start_date']} to {item['end_date']}"
+            })
+            
+        # Get recent document uploads
+        for doc in doc_response.get('Items', []):
+            activity.append({
+                'type': 'document',
+                'date': doc['created_at'],
+                'description': f"Uploaded document: {doc['filename']}"
+            })
+            
+        # Sort activity by date
+        activity.sort(key=lambda x: x['date'], reverse=True)
+        stats['recent_activity'] = activity[:5]  # Get 5 most recent activities
         
         # Get upcoming holidays
         stats['upcoming_holidays'] = get_upcoming_holidays()
@@ -197,23 +240,56 @@ def employees():
                          employees=employees_list,
                          is_admin=session.get('is_admin', False))
 
+@app.route('/admin/leave-requests')
+@login_required
+@admin_required
+def admin_leave_requests():
+    try:
+        table = dynamodb.Table('LeaveRequests')
+        response = table.scan()
+        requests_list = response.get('Items', [])
+        
+        # Sort by status (PENDING first) and date
+        requests_list.sort(key=lambda x: (
+            0 if x['status'] == 'PENDING' else 1,
+            x['created_at']
+        ), reverse=True)
+        
+    except Exception as e:
+        flash(f'Error retrieving leave requests: {str(e)}', 'error')
+        requests_list = []
+    
+    return render_template('admin/leave_requests.html',
+                         requests=requests_list)
+
 @app.route('/leave-requests', methods=['GET', 'POST'])
 @login_required
 def leave_requests():
+    if session.get('is_admin'):
+        return redirect(url_for('admin_leave_requests'))
+        
     table = dynamodb.Table('LeaveRequests')
     
     if request.method == 'POST':
-        if session.get('is_admin'):
-            flash('Admins cannot submit leave requests', 'error')
-            return redirect(url_for('leave_requests'))
-            
         try:
+            # Calculate the number of days
+            start_date = datetime.strptime(request.form['start_date'], '%Y-%m-%d')
+            end_date = datetime.strptime(request.form['end_date'], '%Y-%m-%d')
+            days_count = (end_date - start_date).days + 1
+            
+            # Check remaining leave balance
+            current_balance = get_leave_balance(session['user_id'])
+            if days_count > current_balance:
+                flash(f'Insufficient leave balance. You have {current_balance} days remaining.', 'error')
+                return redirect(url_for('leave_requests'))
+            
             leave_data = {
                 'request_id': str(uuid.uuid4()),
                 'employee_id': session['user_id'],
                 'employee_name': session['user_name'],
                 'start_date': request.form['start_date'],
                 'end_date': request.form['end_date'],
+                'days_requested': days_count,
                 'reason': request.form['reason'],
                 'status': 'PENDING',
                 'created_at': datetime.now().isoformat()
@@ -227,21 +303,19 @@ def leave_requests():
         return redirect(url_for('leave_requests'))
     
     try:
-        if session.get('is_admin'):
-            response = table.scan()
-        else:
-            response = table.scan(
-                FilterExpression='employee_id = :eid',
-                ExpressionAttributeValues={':eid': session['user_id']}
-            )
+        response = table.scan(
+            FilterExpression='employee_id = :eid',
+            ExpressionAttributeValues={':eid': session['user_id']}
+        )
         requests_list = response.get('Items', [])
+        requests_list.sort(key=lambda x: x['created_at'], reverse=True)
     except Exception as e:
         flash(f'Error retrieving leave requests: {str(e)}', 'error')
         requests_list = []
     
     return render_template('leave/list.html',
                          requests=requests_list,
-                         is_admin=session.get('is_admin', False))
+                         leave_balance=get_leave_balance(session['user_id']))
 
 @app.route('/leave-requests/approve/<request_id>', methods=['POST'])
 @login_required
@@ -308,15 +382,17 @@ def documents():
                 document_id = str(uuid.uuid4())
                 s3_key = f"{session['user_id']}/{document_id}/{filename}"
                 
-                # Upload to S3
+                # Upload to S3 with server-side encryption
                 s3_client.upload_fileobj(
                     file,
                     os.getenv('S3_BUCKET_NAME'),
                     s3_key,
-                    ExtraArgs={'ContentType': file.content_type}
+                    ExtraArgs={
+                        'ServerSideEncryption': 'AES256',
+                        'ContentType': file.content_type
+                    }
                 )
                 
-                # Store metadata
                 document_data = {
                     'document_id': document_id,
                     'employee_id': session['user_id'],
@@ -324,7 +400,8 @@ def documents():
                     'filename': filename,
                     'description': request.form.get('description', ''),
                     's3_key': s3_key,
-                    'created_at': datetime.now().isoformat()
+                    'created_at': datetime.now().isoformat(),
+                    'is_public': request.form.get('is_public') == 'on'
                 }
                 
                 table.put_item(Item=document_data)
@@ -337,23 +414,27 @@ def documents():
     
     try:
         if session.get('is_admin'):
+            # Admins can see all documents
             response = table.scan()
         else:
+            # Regular employees see their own documents and public documents
             response = table.scan(
-                FilterExpression='employee_id = :eid',
-                ExpressionAttributeValues={':eid': session['user_id']}
+                FilterExpression='employee_id = :eid OR is_public = :pub',
+                ExpressionAttributeValues={
+                    ':eid': session['user_id'],
+                    ':pub': True
+                }
             )
         documents_list = response.get('Items', [])
         
-        # Generate download URLs
+        # Generate download URLs for each document
         for doc in documents_list:
-            doc['download_url'] = s3_client.generate_presigned_url('get_object',
-                Params={
-                    'Bucket': os.getenv('S3_BUCKET_NAME'),
-                    'Key': doc['s3_key']
-                },
-                ExpiresIn=3600
-            )
+            try:
+                doc['download_url'] = url_for('download_document', document_id=doc['document_id'])
+            except Exception as e:
+                print(f"Error generating URL for document {doc['document_id']}: {e}")
+                doc['download_url'] = '#'
+            
     except Exception as e:
         flash(f'Error retrieving documents: {str(e)}', 'error')
         documents_list = []
@@ -361,6 +442,58 @@ def documents():
     return render_template('documents/list.html',
                          documents=documents_list,
                          is_admin=session.get('is_admin', False))
+
+@app.route('/documents/download/<document_id>')
+@login_required
+def download_document(document_id):
+    try:
+        # Print debugging information (remove in production)
+        print("AWS Region:", os.getenv('AWS_REGION'))
+        print("Bucket Name:", os.getenv('S3_BUCKET_NAME'))
+        print("Access Key exists:", bool(os.getenv('AWS_ACCESS_KEY_ID')))
+        print("Secret Key exists:", bool(os.getenv('AWS_SECRET_ACCESS_KEY')))
+
+        # Get document details from DynamoDB
+        table = dynamodb.Table('Documents')
+        response = table.get_item(Key={'document_id': document_id})
+        
+        if 'Item' not in response:
+            flash('Document not found', 'error')
+            return redirect(url_for('documents'))
+            
+        document = response['Item']
+        
+        # Check if user has permission to download
+        if not (document['employee_id'] == session['user_id'] or 
+                session.get('is_admin') or 
+                document.get('is_public')):
+            flash('Permission denied', 'error')
+            return redirect(url_for('documents'))
+
+        try:
+            # Get the file from S3
+            s3_response = s3_client.get_object(
+                Bucket=os.getenv('S3_BUCKET_NAME'),
+                Key=document['s3_key']
+            )
+            
+            # Stream the file directly to the user
+            return send_file(
+                s3_response['Body'],
+                download_name=document['filename'],
+                as_attachment=True,
+                mimetype=s3_response['ContentType']
+            )
+            
+        except Exception as e:
+            print(f"S3 Error: {str(e)}")
+            flash('Error accessing document from storage', 'error')
+            return redirect(url_for('documents'))
+            
+    except Exception as e:
+        print(f"General Error: {str(e)}")
+        flash('Error accessing document', 'error')
+        return redirect(url_for('documents'))
 
 @app.route('/documents/delete/<document_id>', methods=['POST'])
 @login_required
@@ -372,17 +505,20 @@ def delete_document(document_id):
         if 'Item' in response:
             document = response['Item']
             
+            # Check if user has permission to delete
             if document['employee_id'] == session['user_id'] or session.get('is_admin'):
                 # Delete from S3
-                s3_client.delete_object(
-                    Bucket=os.getenv('S3_BUCKET_NAME'),
-                    Key=document['s3_key']
-                )
+                try:
+                    s3_client.delete_object(
+                        Bucket=os.getenv('S3_BUCKET_NAME'),
+                        Key=document['s3_key']
+                    )
+                except Exception as e:
+                    print(f"Error deleting from S3: {e}")
                 
                 # Delete from DynamoDB
                 table.delete_item(Key={'document_id': document_id})
                 
-                flash('Document deleted successfully', 'success')
                 return jsonify({'status': 'success'})
             else:
                 return jsonify({'status': 'error', 'message': 'Permission denied'}), 403
@@ -390,7 +526,7 @@ def delete_document(document_id):
         return jsonify({'status': 'error', 'message': 'Document not found'}), 404
         
     except Exception as e:
-        flash(f'Error deleting document: {str(e)}', 'error')
+        print(f"Error in delete_document: {e}")
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
 @app.template_filter('format_date')
