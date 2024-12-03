@@ -8,30 +8,25 @@
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
 </head>
 <body class="bg-gray-100 min-h-screen">
-    <!-- Navigation -->
     <nav class="bg-blue-600 shadow-lg">
         <div class="container mx-auto px-6">
             <div class="flex justify-between items-center h-16">
                 <a href="{{ url_for('dashboard') }}" class="text-white text-xl font-bold">HRMS</a>
-                
                 {% if session.user_id %}
-                <div class="flex items-center space-x-6">
-                    <a href="{{ url_for('dashboard') }}" class="text-white hover:text-gray-200">Dashboard</a>
-                    {% if session.is_admin %}
-                    <a href="{{ url_for('employees') }}" class="text-white hover:text-gray-200">Employees</a>
-                    {% endif %}
-                    <a href="{{ url_for('leave_requests') }}" class="text-white hover:text-gray-200">Leave Requests</a>
-                    <a href="{{ url_for('documents') }}" class="text-white hover:text-gray-200">Documents</a>
-                    <a href="{{ url_for('logout') }}" class="bg-red-500 hover:bg-red-600 text-white px-4 py-2 rounded">
-                        Logout
-                    </a>
-                </div>
+                    <div class="flex items-center space-x-6">
+                        <a href="{{ url_for('dashboard') }}" class="text-white hover:text-gray-200">Dashboard</a>
+                        {% if session.is_admin %}
+                            <a href="{{ url_for('employees') }}" class="text-white hover:text-gray-200">Employees</a>
+                        {% endif %}
+                        <a href="{{ url_for('leave_requests') }}" class="text-white hover:text-gray-200">Leave Requests</a>
+                        <a href="{{ url_for('documents') }}" class="text-white hover:text-gray-200">Documents</a>
+                        <a href="{{ url_for('logout') }}" class="bg-red-500 hover:bg-red-600 text-white px-4 py-2 rounded">Logout</a>
+                    </div>
                 {% endif %}
             </div>
         </div>
     </nav>
 
-    <!-- Flash Messages -->
     <div class="container mx-auto px-6 py-4">
         {% with messages = get_flashed_messages(with_categories=true) %}
             {% if messages %}
@@ -44,10 +39,8 @@
         {% endwith %}
     </div>
 
-    <!-- Main Content -->
     {% block content %}{% endblock %}
 
-    <!-- Footer -->
     <footer class="bg-white mt-8 py-4">
         <div class="container mx-auto px-6">
             <div class="text-center text-gray-600">
