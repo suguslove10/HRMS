@@ -1,4 +1,3 @@
-
 from flask import Flask, render_template, request, jsonify, session, redirect, url_for, flash, send_file, make_response
 import io
 import boto3
@@ -11,7 +10,6 @@ from datetime import datetime, date, timedelta
 import uuid
 from dotenv import load_dotenv
 import bcrypt
-from flask import make_response
 
 load_dotenv()
 
@@ -22,6 +20,48 @@ app.secret_key = os.getenv('FLASK_SECRET_KEY')
 dynamodb = boto3.resource('dynamodb', region_name=os.getenv('AWS_REGION'))
 s3_client = boto3.client('s3', region_name=os.getenv('AWS_REGION'))
 
+# Template Filters
+@app.template_filter('format_date')
+def format_date(date_string):
+    try:
+        date_obj = datetime.fromisoformat(date_string)
+        return date_obj.strftime('%Y-%m-%d %H:%M:%S')
+    except:
+        return date_string
+
+@app.template_filter('time_ago')
+def time_ago(date_string):
+    """Convert a datetime string to a 'time ago' string (e.g., '2 hours ago')"""
+    try:
+        # Parse the ISO format datetime string
+        date_obj = datetime.fromisoformat(date_string)
+        now = datetime.now()
+        diff = now - date_obj
+
+        # Calculate the time difference
+        seconds = diff.total_seconds()
+        minutes = seconds // 60
+        hours = minutes // 60
+        days = diff.days
+
+        # Return appropriate string based on time difference
+        if days > 365:
+            years = days // 365
+            return f"{years} year{'s' if years != 1 else ''} ago"
+        if days > 30:
+            months = days // 30
+            return f"{months} month{'s' if months != 1 else ''} ago"
+        if days > 0:
+            return f"{days} day{'s' if days != 1 else ''} ago"
+        if hours > 0:
+            return f"{int(hours)} hour{'s' if int(hours) != 1 else ''} ago"
+        if minutes > 0:
+            return f"{int(minutes)} minute{'s' if int(minutes) != 1 else ''} ago"
+        return "just now"
+    except Exception as e:
+        print(f"Error in time_ago filter: {e}")
+        return date_string
+
 # Context processor for date
 @app.context_processor
 def inject_today():
@@ -29,16 +69,61 @@ def inject_today():
 
 def get_upcoming_holidays():
     today = date.today()
+    current_year = today.year
+    next_year = current_year + 1
+    
     holidays = [
-        {'name': 'Christmas Day', 'date': date(today.year, 12, 25)},
-        {'name': "New Year's Day", 'date': date(today.year + 1, 1, 1)}
+        # Current Year Holidays
+        {'name': 'Republic Day', 'date': date(current_year, 1, 26)},
+        {'name': 'Good Friday', 'date': date(current_year, 3, 29)},
+        {'name': 'Eid al-Fitr', 'date': date(current_year, 4, 11)},
+        {'name': 'Independence Day', 'date': date(current_year, 8, 15)},
+        {'name': 'Gandhi Jayanti', 'date': date(current_year, 10, 2)},
+        {'name': 'Diwali', 'date': date(current_year, 11, 1)},
+        {'name': 'Christmas Day', 'date': date(current_year, 12, 25)},
+        # Next Year Holidays
+        {'name': "New Year's Day", 'date': date(next_year, 1, 1)},
     ]
     
-    return [{
-        'name': holiday['name'],
-        'date': holiday['date'].strftime('%B %d, %Y'),
-        'days_left': (holiday['date'] - today).days
-    } for holiday in holidays if holiday['date'] >= today]
+    upcoming = []
+    for holiday in holidays:
+        days_left = (holiday['date'] - today).days
+        if days_left >= 0:
+            upcoming.append({
+                'name': holiday['name'],
+                'date': holiday['date'].strftime('%B %d, %Y'),
+                'days_left': days_left
+            })
+    
+    return sorted(upcoming, key=lambda x: x['days_left'])[:4]
+
+def get_employee_stats():
+    try:
+        table = dynamodb.Table('Employees')
+        response = table.scan()
+        employees = response.get('Items', [])
+        
+        stats = {
+            'total_count': len(employees),
+            'departments': {},
+            'roles': {},
+            'admin_count': 0
+        }
+        
+        for emp in employees:
+            dept = emp.get('department', 'Other')
+            stats['departments'][dept] = stats['departments'].get(dept, 0) + 1
+            
+            role = emp.get('role', 'employee')
+            stats['roles'][role] = stats['roles'].get(role, 0) + 1
+            
+            if emp.get('role') in ['admin', 'super_admin']:
+                stats['admin_count'] += 1
+        
+        return stats
+    except Exception as e:
+        print(f"Error getting employee stats: {e}")
+        return None
 
 def get_leave_balance(employee_id):
     try:
@@ -58,7 +143,7 @@ def get_leave_balance(employee_id):
             for req in response.get('Items', [])
         )
         
-        return 30 - total_days_taken  # Assuming 30 days annual leave
+        return 30 - total_days_taken
     except Exception as e:
         print(f"Error calculating leave balance: {e}")
         return 0
@@ -69,6 +154,7 @@ def hash_password(password):
 def check_password(password, hashed):
     return bcrypt.checkpw(password.encode('utf-8'), hashed.encode('utf-8'))
 
+# Decorators
 def login_required(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
@@ -81,11 +167,21 @@ def login_required(f):
 def admin_required(f):
     @wraps(f)
     def decorated_function(*args, **kwargs):
-        if not session.get('is_admin', False):
+        if session.get('role') not in ['admin', 'super_admin']:
             flash('Admin access required', 'error')
             return redirect(url_for('dashboard'))
         return f(*args, **kwargs)
     return decorated_function
+
+def super_admin_required(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if session.get('role') != 'super_admin':
+            flash('Super Admin access required', 'error')
+            return redirect(url_for('dashboard'))
+        return f(*args, **kwargs)
+    return decorated_function
+
 
 @app.route('/')
 def index():
@@ -109,8 +205,15 @@ def login():
                     session['user_id'] = employee['employee_id']
                     session['user_name'] = employee['name']
                     session['email'] = employee['email']
-                    session['is_admin'] = employee.get('is_admin', False)
                     session['department'] = employee.get('department', 'General')
+                    session['position'] = employee.get('position', 'Employee')
+                    # Update role handling
+                    if employee.get('is_super_admin'):
+                        session['role'] = 'super_admin'
+                    elif employee.get('is_admin'):
+                        session['role'] = 'admin'
+                    else:
+                        session['role'] = 'employee'
                     flash('Login successful!', 'success')
                     return redirect(url_for('dashboard'))
             
@@ -202,6 +305,11 @@ def employees():
         try:
             email = request.form['email']
             
+            # Only super_admin can create other admins
+            if request.form.get('is_admin') == 'on' and session.get('role') != 'super_admin':
+                flash('Only Super Admins can create admin accounts', 'error')
+                return redirect(url_for('employees'))
+
             # Check if email exists
             response = table.get_item(Key={'email': email})
             if 'Item' in response:
@@ -216,6 +324,7 @@ def employees():
                 'department': request.form['department'],
                 'position': request.form['position'],
                 'is_admin': request.form.get('is_admin') == 'on',
+                'is_super_admin': request.form.get('is_super_admin') == 'on' and session.get('role') == 'super_admin',
                 'created_at': datetime.now().isoformat(),
                 'created_by': session['email']
             }
@@ -225,20 +334,15 @@ def employees():
         except Exception as e:
             flash(f'Error adding employee: {str(e)}', 'error')
         
-        return redirect(url_for('employees'))
-    
+    # Retrieve all employees from DynamoDB
     try:
         response = table.scan()
         employees_list = response.get('Items', [])
-        for emp in employees_list:
-            emp.pop('password', None)
     except Exception as e:
         flash(f'Error retrieving employees: {str(e)}', 'error')
         employees_list = []
     
-    return render_template('employees/list.html',
-                         employees=employees_list,
-                         is_admin=session.get('is_admin', False))
+    return render_template('employees/list.html', employees=employees_list)
 
 @app.route('/leave-requests', methods=['GET', 'POST'])
 @login_required
@@ -267,7 +371,7 @@ def leave_requests():
                 'end_date': request.form['end_date'],
                 'days_requested': days_count,
                 'reason': request.form['reason'],
-                'status': 'PENDING',
+                'status': 'PENDING_ADMIN' if session.get('is_admin') else 'PENDING',
                 'created_at': datetime.now().isoformat()
             }
             
@@ -292,6 +396,8 @@ def leave_requests():
     return render_template('leave/list.html',
                          requests=requests_list,
                          leave_balance=get_leave_balance(session['user_id']))
+
+
 
 @app.route('/admin/leave-requests', methods=['GET', 'POST'])
 @login_required
@@ -354,6 +460,23 @@ def admin_leave_requests():
 def approve_leave(request_id):
     try:
         table = dynamodb.Table('LeaveRequests')
+        
+        # Get the leave request
+        response = table.get_item(Key={'request_id': request_id})
+        if 'Item' not in response:
+            return jsonify({'status': 'error', 'message': 'Leave request not found'}), 404
+            
+        leave_request = response['Item']
+        
+        # Check if admin can approve
+        if session.get('role') != 'super_admin':
+            # Get the employee details to check if they're an admin
+            emp_table = dynamodb.Table('Employees')
+            emp_response = emp_table.get_item(Key={'employee_id': leave_request['employee_id']})
+            if 'Item' in emp_response and emp_response['Item'].get('is_admin'):
+                return jsonify({'status': 'error', 'message': 'Only Super Admin can approve admin leave requests'}), 403
+        
+        # Proceed with approval
         table.update_item(
             Key={'request_id': request_id},
             UpdateExpression='SET #status = :status, updated_at = :updated_at, approved_by = :approved_by',
