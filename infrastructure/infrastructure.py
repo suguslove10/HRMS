@@ -153,7 +153,7 @@ FLASK_DEBUG=1"""
                             'NoncurrentVersionExpiration': {
                                 'NoncurrentDays': 30
                             },
-                            'Filter': {}  # Required empty filter
+                            'Filter': {}
                         }
                     ]
                 }
@@ -172,6 +172,7 @@ FLASK_DEBUG=1"""
             dynamodb = boto3.resource('dynamodb', region_name=self.region)
             table = dynamodb.Table('Employees')
             
+            # Create regular admin
             admin_data = {
                 'employee_id': str(uuid.uuid4()),
                 'email': 'admin@hrms.com',
@@ -179,34 +180,73 @@ FLASK_DEBUG=1"""
                 'password': bcrypt.hashpw('admin123'.encode('utf-8'), bcrypt.gensalt()).decode('utf-8'),
                 'department': 'Administration',
                 'position': 'System Admin',
+                'role': 'admin',
                 'is_admin': True,
-                'created_at': datetime.now().isoformat()
+                'created_at': datetime.now().isoformat(),
+                'created_by': 'system'
             }
             
-            table.put_item(Item=admin_data)
-            print("Created default admin user (admin@hrms.com / admin123)")
-        except Exception as e:
-            print(f"Error creating default admin: {str(e)}")
-            raise
+            # Create super admin
+            super_admin_data = {
+                'employee_id': str(uuid.uuid4()),
+                'email': 'superadmin@hrms.com',
+                'name': 'Super Admin',
+                'password': bcrypt.hashpw('superadmin123'.encode('utf-8'), bcrypt.gensalt()).decode('utf-8'),
+                'department': 'Administration',
+                'position': 'Super Administrator',
+                'role': 'super admin',
+                'is_admin': True,
+                'created_at': datetime.now().isoformat(),
+                'created_by': 'system'
+            }
             
+            # Check if admin exists
+            response = table.get_item(Key={'email': 'admin@hrms.com'})
+            if 'Item' not in response:
+                table.put_item(Item=admin_data)
+                print("\n✅ Created default admin user (admin@hrms.com / admin123)")
+            else:
+                print("\nℹ️ Admin user already exists")
+                
+            # Check if super admin exists
+            response = table.get_item(Key={'email': 'superadmin@hrms.com'})
+            if 'Item' not in response:
+                table.put_item(Item=super_admin_data)
+                print("✅ Created super admin user (superadmin@hrms.com / superadmin123)")
+            else:
+                print("ℹ️ Super admin user already exists")
+                
+        except Exception as e:
+            print(f"Error creating default admins: {str(e)}")
+            raise
+
 def main():
     try:
         hrms = HRMSInfrastructure()
         
+        print("\n🚀 Starting HRMS infrastructure setup...")
+        
         os.makedirs('infrastructure', exist_ok=True)
         os.makedirs('src/lambda', exist_ok=True)
         
+        print("\n📝 Generating environment file...")
         hrms.generate_env_file()
+        
+        print("\n🗄️ Creating DynamoDB tables...")
         hrms.create_dynamodb_tables()
+        
+        print("\n📦 Setting up S3 bucket...")
         hrms.create_s3_bucket('sugu-doc-private')
+        
+        print("\n👤 Creating admin users...")
         hrms.create_default_admin()
 
-        print("\nHRMS infrastructure setup completed successfully!")
-        print("The .env file has been updated with all required configurations")
-        print("Run 'python src/web/app.py' to start the application")
+        print("\n✨ HRMS infrastructure setup completed successfully!")
+        print("📌 The .env file has been updated with all required configurations")
+        print("🚀 Run 'python src/web/app.py' to start the application")
         
     except Exception as e:
-        print(f"\nError during setup: {str(e)}")
+        print(f"\n❌ Error during setup: {str(e)}")
         raise
 
 if __name__ == "__main__":
