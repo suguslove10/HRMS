@@ -240,28 +240,6 @@ def employees():
                          employees=employees_list,
                          is_admin=session.get('is_admin', False))
 
-@app.route('/admin/leave-requests')
-@login_required
-@admin_required
-def admin_leave_requests():
-    try:
-        table = dynamodb.Table('LeaveRequests')
-        response = table.scan()
-        requests_list = response.get('Items', [])
-        
-        # Sort by status (PENDING first) and date
-        requests_list.sort(key=lambda x: (
-            0 if x['status'] == 'PENDING' else 1,
-            x['created_at']
-        ), reverse=True)
-        
-    except Exception as e:
-        flash(f'Error retrieving leave requests: {str(e)}', 'error')
-        requests_list = []
-    
-    return render_template('admin/leave_requests.html',
-                         requests=requests_list)
-
 @app.route('/leave-requests', methods=['GET', 'POST'])
 @login_required
 def leave_requests():
@@ -272,12 +250,10 @@ def leave_requests():
     
     if request.method == 'POST':
         try:
-            # Calculate the number of days
             start_date = datetime.strptime(request.form['start_date'], '%Y-%m-%d')
             end_date = datetime.strptime(request.form['end_date'], '%Y-%m-%d')
             days_count = (end_date - start_date).days + 1
             
-            # Check remaining leave balance
             current_balance = get_leave_balance(session['user_id'])
             if days_count > current_balance:
                 flash(f'Insufficient leave balance. You have {current_balance} days remaining.', 'error')
@@ -316,6 +292,61 @@ def leave_requests():
     return render_template('leave/list.html',
                          requests=requests_list,
                          leave_balance=get_leave_balance(session['user_id']))
+
+@app.route('/admin/leave-requests', methods=['GET', 'POST'])
+@login_required
+@admin_required
+def admin_leave_requests():
+    table = dynamodb.Table('LeaveRequests')
+    
+    if request.method == 'POST':
+        try:
+            start_date = datetime.strptime(request.form['start_date'], '%Y-%m-%d')
+            end_date = datetime.strptime(request.form['end_date'], '%Y-%m-%d')
+            days_count = (end_date - start_date).days + 1
+            
+            current_balance = get_leave_balance(session['user_id'])
+            if days_count > current_balance:
+                flash(f'Insufficient leave balance. You have {current_balance} days remaining.', 'error')
+                return redirect(url_for('admin_leave_requests'))
+            
+            leave_data = {
+                'request_id': str(uuid.uuid4()),
+                'employee_id': session['user_id'],
+                'employee_name': session['user_name'],
+                'start_date': request.form['start_date'],
+                'end_date': request.form['end_date'],
+                'days_requested': days_count,
+                'reason': request.form['reason'],
+                'status': 'PENDING',
+                'created_at': datetime.now().isoformat()
+            }
+            
+            table.put_item(Item=leave_data)
+            flash('Leave request submitted successfully', 'success')
+            return redirect(url_for('admin_leave_requests'))
+            
+        except Exception as e:
+            flash(f'Error submitting leave request: {str(e)}', 'error')
+            return redirect(url_for('admin_leave_requests'))
+    
+    try:
+        response = table.scan()
+        requests_list = response.get('Items', [])
+        requests_list.sort(key=lambda x: (
+            0 if x['status'] == 'PENDING' else 1,
+            x['created_at']
+        ), reverse=True)
+        
+        return render_template('admin/leave_requests.html',
+                             requests=requests_list,
+                             leave_balance=get_leave_balance(session['user_id']))
+                             
+    except Exception as e:
+        flash(f'Error retrieving leave requests: {str(e)}', 'error')
+        return render_template('admin/leave_requests.html',
+                             requests=[],
+                             leave_balance=get_leave_balance(session['user_id']))
 
 @app.route('/leave-requests/approve/<request_id>', methods=['POST'])
 @login_required
@@ -360,6 +391,8 @@ def reject_leave(request_id):
     except Exception as e:
         flash(f'Error rejecting leave request: {str(e)}', 'error')
         return jsonify({'status': 'error', 'message': str(e)}), 500
+
+
 
 @app.route('/documents', methods=['GET', 'POST'])
 @login_required
