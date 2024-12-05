@@ -11,39 +11,37 @@
     </div>
 
     <div class="bg-white rounded-lg shadow-md">
-        <div class="grid gap-4 p-6">
-            {% for request in requests %}
-            <div class="border rounded-lg p-4">
+        {% for request in requests %}
+            <div class="border-b p-6">
                 <div class="flex justify-between items-start">
                     <div>
                         <h3 class="font-semibold text-gray-800">{{ request.employee_name }}</h3>
-                        <p class="text-sm text-gray-500">{{ request.start_date }} to {{ request.end_date }}</p>
-                        <p class="text-sm text-gray-500 mt-1">{{ request.created_at|format_date }}</p>
+                        <p class="text-gray-600 mt-1">{{ request.start_date }} to {{ request.end_date }}</p>
+                        <p class="text-gray-500 text-sm mt-1">{{ request.created_at|format_date }}</p>
                         <p class="mt-2">{{ request.reason }}</p>
                     </div>
                     <div class="flex items-center space-x-2">
-                        {% if request.status == 'PENDING' and is_admin and request.employee_id != session.user_id %}
-                        <button onclick="approveLeave('{{ request.request_id }}')"
-                                class="px-4 py-2 bg-green-100 text-green-700 rounded-lg hover:bg-green-200">
-                            Approve
-                        </button>
-                        <button onclick="rejectLeave('{{ request.request_id }}')"
-                                class="px-4 py-2 bg-red-100 text-red-700 rounded-lg hover:bg-red-200">
-                            Reject
-                        </button>
+                        {% if request.status == 'PENDING' and request.employee_id != session.user_id %}
+                            <button onclick="approveLeave('{{ request.request_id }}')"
+                                    class="bg-green-100 text-green-700 px-4 py-2 rounded hover:bg-green-200">
+                                Approve
+                            </button>
+                            <button onclick="rejectLeave('{{ request.request_id }}')"
+                                    class="bg-red-100 text-red-700 px-4 py-2 rounded hover:bg-red-200">
+                                Reject
+                            </button>
                         {% else %}
-                        <span class="px-4 py-2 rounded-lg 
-                            {% if request.status == 'APPROVED' %}bg-green-100 text-green-700
-                            {% elif request.status == 'REJECTED' %}bg-red-100 text-red-700
-                            {% else %}bg-yellow-100 text-yellow-800{% endif %}">
-                            {{ request.status }}
-                        </span>
+                            <span class="px-4 py-2 rounded-lg 
+                                {% if request.status == 'APPROVED' %}bg-green-100 text-green-700
+                                {% elif request.status == 'REJECTED' %}bg-red-100 text-red-700
+                                {% else %}bg-yellow-100 text-yellow-800{% endif %}">
+                                {{ request.status }}
+                            </span>
                         {% endif %}
                     </div>
                 </div>
             </div>
-            {% endfor %}
-        </div>
+        {% endfor %}
     </div>
 
     <!-- Create Leave Modal -->
@@ -54,15 +52,15 @@
                 <form method="POST">
                     <div class="mb-4">
                         <label class="block text-gray-700 text-sm font-bold mb-2">Start Date</label>
-                        <input type="date" name="start_date" class="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700" required>
+                        <input type="date" name="start_date" required class="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700">
                     </div>
                     <div class="mb-4">
                         <label class="block text-gray-700 text-sm font-bold mb-2">End Date</label>
-                        <input type="date" name="end_date" class="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700" required>
+                        <input type="date" name="end_date" required class="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700">
                     </div>
                     <div class="mb-4">
                         <label class="block text-gray-700 text-sm font-bold mb-2">Reason</label>
-                        <textarea name="reason" class="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700" rows="3" required></textarea>
+                        <textarea name="reason" required class="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700" rows="3"></textarea>
                     </div>
                     <div class="flex justify-end space-x-4">
                         <button type="button" onclick="document.getElementById('createLeaveModal').classList.add('hidden')"
@@ -87,7 +85,7 @@ function approveLeave(requestId) {
             headers: {'Content-Type': 'application/json'}
         }).then(response => {
             if (response.ok) {
-                location.reload();
+                window.location.reload();
             }
         });
     }
@@ -100,7 +98,7 @@ function rejectLeave(requestId) {
             headers: {'Content-Type': 'application/json'}
         }).then(response => {
             if (response.ok) {
-                location.reload();
+                window.location.reload();
             }
         });
     }
