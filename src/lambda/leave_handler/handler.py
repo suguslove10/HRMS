@@ -15,7 +15,6 @@ def lambda_handler(event, context):
             request_data['request_id'] = str(uuid.uuid4())
             request_data['created_at'] = datetime.now().isoformat()
             request_data['status'] = 'PENDING'
-            
             table.put_item(Item=request_data)
             return {
                 'statusCode': 200,
@@ -37,10 +36,8 @@ def lambda_handler(event, context):
             employee_id = event.get('employee_id')
             response = table.scan()
             requests = response.get('Items', [])
-            
             if employee_id:
                 requests = [r for r in requests if r.get('employee_id') == employee_id]
-                
             return {
                 'statusCode': 200,
                 'body': json.dumps(requests)
@@ -49,12 +46,28 @@ def lambda_handler(event, context):
         elif operation == 'update_status':
             request_id = event.get('request_id')
             new_status = event.get('status')
+            approved_by = event.get('approved_by')
+            rejected_by = event.get('rejected_by')
+            
+            update_expression = 'SET #status = :status, updated_at = :updated_at'
+            expression_values = {
+                ':status': new_status,
+                ':updated_at': datetime.now().isoformat()
+            }
+            
+            # Add approver/rejecter information if provided
+            if approved_by:
+                update_expression += ', approved_by = :approved_by'
+                expression_values[':approved_by'] = approved_by
+            if rejected_by:
+                update_expression += ', rejected_by = :rejected_by'
+                expression_values[':rejected_by'] = rejected_by
             
             table.update_item(
                 Key={'request_id': request_id},
-                UpdateExpression='SET #status = :status',
+                UpdateExpression=update_expression,
                 ExpressionAttributeNames={'#status': 'status'},
-                ExpressionAttributeValues={':status': new_status}
+                ExpressionAttributeValues=expression_values
             )
             
             return {
