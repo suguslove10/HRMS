@@ -52,48 +52,120 @@ FLASK_DEBUG=1"""
     def create_dynamodb_tables(self):
         tables = {
             'Employees': {
+                'TableName': 'Employees',
                 'KeySchema': [
                     {'AttributeName': 'email', 'KeyType': 'HASH'}
                 ],
                 'AttributeDefinitions': [
-                    {'AttributeName': 'email', 'AttributeType': 'S'}
+                    {'AttributeName': 'email', 'AttributeType': 'S'},
+                    {'AttributeName': 'employee_id', 'AttributeType': 'S'}
+                ],
+                'GlobalSecondaryIndexes': [
+                    {
+                        'IndexName': 'EmployeeIdIndex',
+                        'KeySchema': [
+                            {'AttributeName': 'employee_id', 'KeyType': 'HASH'}
+                        ],
+                        'Projection': {
+                            'ProjectionType': 'ALL'
+                        }
+                    }
                 ]
             },
             'LeaveRequests': {
+                'TableName': 'LeaveRequests',
                 'KeySchema': [
                     {'AttributeName': 'request_id', 'KeyType': 'HASH'}
                 ],
                 'AttributeDefinitions': [
-                    {'AttributeName': 'request_id', 'AttributeType': 'S'}
+                    {'AttributeName': 'request_id', 'AttributeType': 'S'},
+                    {'AttributeName': 'employee_id', 'AttributeType': 'S'},
+                    {'AttributeName': 'created_at', 'AttributeType': 'S'}
+                ],
+                'GlobalSecondaryIndexes': [
+                    {
+                        'IndexName': 'EmployeeLeaveIndex',
+                        'KeySchema': [
+                            {'AttributeName': 'employee_id', 'KeyType': 'HASH'},
+                            {'AttributeName': 'created_at', 'KeyType': 'RANGE'}
+                        ],
+                        'Projection': {
+                            'ProjectionType': 'ALL'
+                        }
+                    }
                 ]
             },
             'Documents': {
+                'TableName': 'Documents',
                 'KeySchema': [
                     {'AttributeName': 'document_id', 'KeyType': 'HASH'}
                 ],
                 'AttributeDefinitions': [
-                    {'AttributeName': 'document_id', 'AttributeType': 'S'}
+                    {'AttributeName': 'document_id', 'AttributeType': 'S'},
+                    {'AttributeName': 'employee_id', 'AttributeType': 'S'},
+                    {'AttributeName': 'created_at', 'AttributeType': 'S'}
+                ],
+                'GlobalSecondaryIndexes': [
+                    {
+                        'IndexName': 'EmployeeDocumentIndex',
+                        'KeySchema': [
+                            {'AttributeName': 'employee_id', 'KeyType': 'HASH'},
+                            {'AttributeName': 'created_at', 'KeyType': 'RANGE'}
+                        ],
+                        'Projection': {
+                            'ProjectionType': 'ALL'
+                        }
+                    }
                 ]
             }
         }
 
-        for table_name, schema in tables.items():
+        for table_name, table_config in tables.items():
             try:
-                self.dynamodb.create_table(
-                    TableName=table_name,
-                    KeySchema=schema['KeySchema'],
-                    AttributeDefinitions=schema['AttributeDefinitions'],
-                    BillingMode='PAY_PER_REQUEST'
-                )
-                print(f"Created table {table_name}")
+                create_params = {
+                    'TableName': table_config['TableName'],
+                    'KeySchema': table_config['KeySchema'],
+                    'AttributeDefinitions': table_config['AttributeDefinitions'],
+                    'BillingMode': 'PAY_PER_REQUEST'
+                }
+                
+                if 'GlobalSecondaryIndexes' in table_config:
+                    create_params['GlobalSecondaryIndexes'] = table_config['GlobalSecondaryIndexes']
+                
+                self.dynamodb.create_table(**create_params)
+                print(f"Creating table {table_name}...")
+                
                 waiter = self.dynamodb.get_waiter('table_exists')
                 waiter.wait(
                     TableName=table_name,
                     WaiterConfig={'Delay': 5, 'MaxAttempts': 24}
                 )
+                print(f"✅ Table {table_name} created successfully")
+                
             except ClientError as e:
                 if e.response['Error']['Code'] == 'ResourceInUseException':
                     print(f"Table {table_name} already exists")
+                    # Update GSIs if needed
+                    try:
+                        if 'GlobalSecondaryIndexes' in table_config:
+                            existing_table = self.dynamodb.describe_table(TableName=table_name)
+                            existing_gsis = {
+                                gsi['IndexName']: gsi 
+                                for gsi in existing_table['Table'].get('GlobalSecondaryIndexes', [])
+                            }
+                            
+                            for gsi in table_config['GlobalSecondaryIndexes']:
+                                if gsi['IndexName'] not in existing_gsis:
+                                    print(f"Adding GSI {gsi['IndexName']} to {table_name}")
+                                    self.dynamodb.update_table(
+                                        TableName=table_name,
+                                        AttributeDefinitions=table_config['AttributeDefinitions'],
+                                        GlobalSecondaryIndexUpdates=[{
+                                            'Create': gsi
+                                        }]
+                                    )
+                    except Exception as gsi_error:
+                        print(f"Error updating GSIs for {table_name}: {str(gsi_error)}")
                 else:
                     raise e
 
@@ -153,13 +225,13 @@ FLASK_DEBUG=1"""
                             'NoncurrentVersionExpiration': {
                                 'NoncurrentDays': 30
                             },
-                            'Filter': {}  # Required empty filter
+                            'Filter': {}
                         }
                     ]
                 }
             )
 
-            print(f"Created private S3 bucket {unique_bucket_name} with enhanced security")
+            print(f"✅ Created private S3 bucket {unique_bucket_name} with enhanced security")
         except ClientError as e:
             if e.response['Error']['Code'] in ['BucketAlreadyExists', 'BucketAlreadyOwnedByYou']:
                 print(f"Bucket {unique_bucket_name} already exists")
@@ -172,6 +244,7 @@ FLASK_DEBUG=1"""
             dynamodb = boto3.resource('dynamodb', region_name=self.region)
             table = dynamodb.Table('Employees')
             
+            # Create regular admin
             admin_data = {
                 'employee_id': str(uuid.uuid4()),
                 'email': 'admin@hrms.com',
@@ -180,33 +253,72 @@ FLASK_DEBUG=1"""
                 'department': 'Administration',
                 'position': 'System Admin',
                 'is_admin': True,
-                'created_at': datetime.now().isoformat()
+                'is_super_admin': False,
+                'created_at': datetime.now().isoformat(),
+                'created_by': 'system'
             }
             
-            table.put_item(Item=admin_data)
-            print("Created default admin user (admin@hrms.com / admin123)")
-        except Exception as e:
-            print(f"Error creating default admin: {str(e)}")
-            raise
+            # Create super admin
+            super_admin_data = {
+                'employee_id': str(uuid.uuid4()),
+                'email': 'superadmin@hrms.com',
+                'name': 'Super Admin',
+                'password': bcrypt.hashpw('superadmin123'.encode('utf-8'), bcrypt.gensalt()).decode('utf-8'),
+                'department': 'Administration',
+                'position': 'Super Administrator',
+                'is_admin': True,
+                'is_super_admin': True,
+                'created_at': datetime.now().isoformat(),
+                'created_by': 'system'
+            }
             
+            # Check if admin exists
+            response = table.get_item(Key={'email': 'admin@hrms.com'})
+            if 'Item' not in response:
+                table.put_item(Item=admin_data)
+                print("\n✅ Created default admin user (admin@hrms.com / admin123)")
+            else:
+                print("\nℹ️ Admin user already exists")
+                
+            # Check if super admin exists
+            response = table.get_item(Key={'email': 'superadmin@hrms.com'})
+            if 'Item' not in response:
+                table.put_item(Item=super_admin_data)
+                print("✅ Created super admin user (superadmin@hrms.com / superadmin123)")
+            else:
+                print("ℹ️ Super admin user already exists")
+                
+        except Exception as e:
+            print(f"Error creating default admins: {str(e)}")
+            raise
+
 def main():
     try:
         hrms = HRMSInfrastructure()
         
+        print("\n🚀 Starting HRMS infrastructure setup...")
+        
         os.makedirs('infrastructure', exist_ok=True)
         os.makedirs('src/lambda', exist_ok=True)
         
+        print("\n📝 Generating environment file...")
         hrms.generate_env_file()
+        
+        print("\n🗄️ Creating DynamoDB tables...")
         hrms.create_dynamodb_tables()
+        
+        print("\n📦 Setting up S3 bucket...")
         hrms.create_s3_bucket('sugu-doc-private')
+        
+        print("\n👤 Creating admin users...")
         hrms.create_default_admin()
 
-        print("\nHRMS infrastructure setup completed successfully!")
-        print("The .env file has been updated with all required configurations")
-        print("Run 'python src/web/app.py' to start the application")
+        print("\n✨ HRMS infrastructure setup completed successfully!")
+        print("📌 The .env file has been updated with all required configurations")
+        print("🚀 Run 'python src/web/app.py' to start the application")
         
     except Exception as e:
-        print(f"\nError during setup: {str(e)}")
+        print(f"\n❌ Error during setup: {str(e)}")
         raise
 
 if __name__ == "__main__":
